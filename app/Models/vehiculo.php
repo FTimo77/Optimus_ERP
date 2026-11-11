@@ -3,11 +3,18 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Vehiculo extends Model
 {
     protected $primaryKey = 'id_vehiculo';
+
+    public $incrementing = false;
+
+    protected $keyType = 'string';
+
     protected $fillable = [
+        'id_vehiculo',
         'id_marca',
         'id_clase',
         'id_pais',
@@ -25,7 +32,7 @@ class Vehiculo extends Model
         'kilometraje',
         'costo_adquisicion',
         'precio_venta',
-        'ruta_matricula'
+        'ruta_matricula',
     ];
 
     public function marca()
@@ -41,7 +48,7 @@ class Vehiculo extends Model
     public function pais()
     {
         return $this->belongsTo(Pais::class, 'id_pais', 'id_pais');
-    }   
+    }
 
     public function color()
     {
@@ -73,4 +80,9 @@ class Vehiculo extends Model
         return $this->belongsTo(Proveedor::class, 'id_proveedor', 'id_proveedor');
     }
 
+    public function imagenPrincipal(): HasOne
+    {
+        return $this->hasOne(Imagen_vehiculo::class, 'id_vehiculo', 'id_vehiculo')
+            ->where('es_principal', true);
+    }
 }

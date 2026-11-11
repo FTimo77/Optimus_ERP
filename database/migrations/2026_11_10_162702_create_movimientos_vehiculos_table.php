@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('movimientos_vehiculos', function (Blueprint $table) {
             $table->id('id_movimiento');
-            $table->unsignedBigInteger('id_vehiculo');
+            $table->string('id_vehiculo', 20);
             $table->unsignedBigInteger('id_tipo_movimiento');
             $table->unsignedBigInteger('id_usuario');
             $table->unsignedBigInteger('id_cliente')->nullable();
@@ -22,7 +22,7 @@ return new class extends Migration
             $table->foreign('id_tipo_movimiento')->references('id_tipo_movimiento')->on('tipo_movimientos');
             $table->foreign('id_usuario')->references('id')->on('users');
             $table->foreign('id_cliente')->references('id_cliente')->on('clientes');
-            
+
             $table->text('descripcion')->nullable();
             $table->dateTime('fecha_movimiento');
             $table->timestamps();

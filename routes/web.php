@@ -1,8 +1,8 @@
 <?php
 
+use App\Http\Controllers\InventarioVehiculoController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\VehiculoIngresoController;
-use App\Http\Controllers\InventarioVehiculoController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -30,9 +30,10 @@ Route::middleware(['auth'])->group(function () {
         ->name('vehiculos.create');
     Route::post('/vehiculos/ingreso', [VehiculoIngresoController::class, 'store'])
         ->name('vehiculos.store');
+
+    Route::post('/vehiculos/consultar-axis', [VehiculoIngresoController::class, 'consultarAxisCloud'])
+        ->name('vehiculos.consultar.axis');
 });
-
-
 
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::create('ventas', function (Blueprint $table) {
             $table->id('id_venta');
             $table->unsignedBigInteger('id_cliente');
-            $table->unsignedBigInteger('id_vehiculo');
+            $table->string('id_vehiculo', 20);
             $table->unsignedBigInteger('id_user');
             $table->unsignedBigInteger('id_metodo_pago');
 

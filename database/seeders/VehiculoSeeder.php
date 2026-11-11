@@ -61,6 +61,7 @@ class VehiculoSeeder extends Seeder
 
             $vehicles = [
                 [
+                    'placa' => 'PBA-1234',
                     'marca' => 'Toyota',
                     'clase' => 'SUV',
                     'pais' => 'Japon',
@@ -79,6 +80,7 @@ class VehiculoSeeder extends Seeder
                     'precio_venta' => 32900.00,
                 ],
                 [
+                    'placa' => 'PBB-2345',
                     'marca' => 'Kia',
                     'clase' => 'Sedan',
                     'pais' => 'Corea del Sur',
@@ -97,6 +99,7 @@ class VehiculoSeeder extends Seeder
                     'precio_venta' => 17400.00,
                 ],
                 [
+                    'placa' => 'PBC-3456',
                     'marca' => 'Hyundai',
                     'clase' => 'SUV',
                     'pais' => 'Corea del Sur',
@@ -115,6 +118,7 @@ class VehiculoSeeder extends Seeder
                     'precio_venta' => 38900.00,
                 ],
                 [
+                    'placa' => 'PBD-4567',
                     'marca' => 'Nissan',
                     'clase' => 'Pickup',
                     'pais' => 'Japon',
@@ -133,6 +137,7 @@ class VehiculoSeeder extends Seeder
                     'precio_venta' => 31200.00,
                 ],
                 [
+                    'placa' => 'PBE-5678',
                     'marca' => 'Chevrolet',
                     'clase' => 'Hatchback',
                     'pais' => 'Estados Unidos',
@@ -156,6 +161,7 @@ class VehiculoSeeder extends Seeder
                 DB::table('vehiculos')->updateOrInsert(
                     ['chasis' => $vehicle['chasis']],
                     [
+                        'id_vehiculo' => $vehicle['placa'],
                         'id_marca' => $catalogIds['marca_vehiculos'][$vehicle['marca']],
                         'id_clase' => $catalogIds['clase_vehiculos'][$vehicle['clase']],
                         'id_pais' => $catalogIds['paises'][$vehicle['pais']],

@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('imagen_vehiculos', function (Blueprint $table) {
             $table->id('id_imagen_vehiculo');
-            $table->unsignedBigInteger('id_vehiculo');
+            $table->string('id_vehiculo', 20);
             $table->string('ruta_imagen', 255);
             $table->boolean('es_principal')->default(false);
             $table->timestamps();

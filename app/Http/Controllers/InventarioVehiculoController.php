@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Vehiculo;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -20,7 +21,17 @@ class InventarioVehiculoController extends Controller
             'patio',
             'estado',
             'proveedor',
-        ])->orderByDesc('id_vehiculo')->get();
+            'imagenPrincipal',
+        ])->orderByDesc('created_at')->get();
+
+        $vehiculos->each(function (Vehiculo $vehiculo): void {
+            $vehiculo->setAttribute(
+                'imagen_url',
+                $vehiculo->imagenPrincipal
+                    ? Storage::disk('public')->url($vehiculo->imagenPrincipal->ruta_imagen)
+                    : null,
+            );
+        });
 
         return Inertia::render('Vehiculos/Inventario', [
             'vehiculos' => $vehiculos,
