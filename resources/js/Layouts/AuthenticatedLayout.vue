@@ -39,6 +39,21 @@ const showingNavigationDropdown = ref(false);
                                 >
                                     Página Principal
                                 </NavLink>
+
+                                <!-- CREAR VEHÍCULO -->
+                                <NavLink 
+                                    :href="route('vehiculos.create')" 
+                                    :active="route().current('vehiculos.create')"
+                                    >
+                                    Ingresar Vehículo
+                                </NavLink>
+                                <!-- CONSULTAR VEHÍCULO -->
+                                <NavLink 
+                                    :href="route('vehiculos.index')"
+                                    :active="route().current('vehiculos.index')"
+                                    >
+                                    Inventario de Vehículos
+                                </NavLink>
                             </div>
                         </div>
 

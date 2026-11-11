@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\VehiculoIngresoController;
+use App\Http\Controllers\InventarioVehiculoController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -18,6 +19,18 @@ Route::get('/', function () {
 Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
+
+Route::middleware(['auth'])->group(function () {
+    // 1. MÓDULO DE INVENTARIO (Para consulta general)
+    Route::get('/vehiculos/inventario', [InventarioVehiculoController::class, 'index'])
+        ->name('vehiculos.index');
+
+    // 2. MÓDULO DE COMPRAS / INGRESO (Para registrar adquisiciones)
+    Route::get('/vehiculos/ingreso', [VehiculoIngresoController::class, 'create'])
+        ->name('vehiculos.create');
+    Route::post('/vehiculos/ingreso', [VehiculoIngresoController::class, 'store'])
+        ->name('vehiculos.store');
+});
 
 
 

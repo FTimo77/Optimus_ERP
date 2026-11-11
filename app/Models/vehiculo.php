@@ -35,7 +35,7 @@ class Vehiculo extends Model
 
     public function clase()
     {
-        return $this->belongsTo(ClaseVehiculo::class, 'id_clase', 'id_clase');
+        return $this->belongsTo(Clase_Vehiculo::class, 'id_clase', 'id_clase');
     }
 
     public function pais()
