@@ -8,9 +8,9 @@ use App\Models\estado_vehiculo;
 use App\Models\imagen_vehiculo;
 use App\Models\marca_vehiculo;
 use App\Models\pais;
-use App\Models\patio;
-use App\Models\proveedor;
+use App\Models\Servicio;
 use App\Models\tipo_combustible;
+use App\Models\TipoVehiculo;
 use App\Models\transmision;
 use App\Models\vehiculo as Vehiculo;
 use Illuminate\Http\RedirectResponse;
@@ -33,9 +33,6 @@ class VehiculoIngresoController extends Controller
             'colores' => color_vehiculo::all(),
             'combustibles' => tipo_combustible::all(),
             'transmisiones' => transmision::all(),
-            'patios' => patio::all(),
-            'estados' => estado_vehiculo::all(),
-            'proveedores' => proveedor::all(),
             'success' => session('success'),
         ]);
     }
@@ -48,6 +45,15 @@ class VehiculoIngresoController extends Controller
             $request->merge(['id_vehiculo' => strtoupper(trim($plate))]);
         }
 
+        foreach (['tipo_vehiculo', 'servicio'] as $field) {
+            $value = $request->input($field);
+
+            if (is_string($value)) {
+                $normalizedValue = mb_strtoupper(trim($value), 'UTF-8');
+                $request->merge([$field => $normalizedValue === '' ? null : $normalizedValue]);
+            }
+        }
+
         $validated = $request->validate([
             'id_vehiculo' => ['required', 'string', 'max:20', 'unique:vehiculos,id_vehiculo'],
             'imagenes' => ['nullable', 'array', 'max:10'],
@@ -58,18 +64,21 @@ class VehiculoIngresoController extends Controller
             'id_color' => ['required', 'exists:color_vehiculos,id_color'],
             'id_tipo_combustible' => ['required', 'exists:tipo_combustibles,id_tipo_combustible'],
             'id_transmision' => ['required', 'exists:transmisiones,id_transmision'],
-            'id_patio' => ['required', 'exists:patios,id_patio'],
-            'id_estado' => ['required', 'exists:estado_vehiculos,id_estado'],
-            'id_proveedor' => ['required', 'exists:proveedores,id_proveedor'],
+            'id_patio' => ['nullable', 'exists:patios,id_patio'],
+            'id_proveedor' => ['nullable', 'exists:proveedores,id_proveedor'],
             'modelo' => ['required', 'string', 'max:100'],
             'anio' => ['required', 'integer', 'min:1980', 'max:'.(date('Y') + 1)],
             'motor' => ['required', 'string', 'max:100', 'unique:vehiculos,motor'],
             'chasis' => ['required', 'string', 'max:100', 'unique:vehiculos,chasis'],
             'cilindraje' => ['required', 'string', 'max:100'],
-            'kilometraje' => ['required', 'integer', 'min:0'],
+            'servicio' => ['nullable', 'string', 'max:100'],
+            'tipo_vehiculo' => ['nullable', 'string', 'max:100'],
+            'kilometraje' => ['nullable', 'integer', 'min:0'],
             'costo_adquisicion' => ['required', 'numeric', 'min:0'],
-            'precio_venta' => ['required', 'numeric', 'min:0', 'gte:costo_adquisicion'],
+            'precio_venta' => ['nullable', 'numeric', 'min:0', 'gte:costo_adquisicion'],
         ]);
+
+        $validated['id_estado'] = estado_vehiculo::firstOrCreate(['nombre' => 'Creado'])->id_estado;
 
         $images = $validated['imagenes'] ?? [];
         unset($validated['imagenes']);
@@ -90,6 +99,17 @@ class VehiculoIngresoController extends Controller
 
         try {
             DB::transaction(function () use ($validated, $imagePaths): void {
+                $tipoVehiculo = $validated['tipo_vehiculo'] ?? null;
+                $servicio = $validated['servicio'] ?? null;
+                unset($validated['tipo_vehiculo'], $validated['servicio']);
+
+                $validated['id_tipo_vehiculo'] = $tipoVehiculo === null
+                    ? null
+                    : TipoVehiculo::firstOrCreate(['nombre' => $tipoVehiculo])->id_tipo_vehiculo;
+                $validated['id_servicio'] = $servicio === null
+                    ? null
+                    : Servicio::firstOrCreate(['nombre' => $servicio])->id_servicio;
+
                 $vehiculo = Vehiculo::create($validated);
 
                 foreach ($imagePaths as $index => $imagePath) {
@@ -188,13 +208,16 @@ class VehiculoIngresoController extends Controller
         $modeloInfo = $datos['lsDatosModelo'] ?? [];
         $otrasInfo = $datos['lsOtrasCaracteristicas'] ?? [];
 
+        $servicio = trim($datos['lsServicio'] ?? '');
+
         $chasis = $extraerValor($identificacion, 'VIN');
         $motor = $extraerValor($identificacion, 'Motor');
         $nombreMarca = $extraerValor($modeloInfo, 'Marca');
         $nombreModelo = $extraerValor($modeloInfo, 'Modelo');
         $anio = $extraerValor($modeloInfo, 'Fabricaci');
         $nombrePais = $extraerValor($modeloInfo, 'Pa');
-        $nombreClase = $extraerValor($otrasInfo, 'Clase') ?: $extraerValor($otrasInfo, 'Tipo');
+        $nombreClase = $extraerValor($otrasInfo, 'Clase Veh'); // Ej: AUTOMOVIL
+        $tipoVehiculo = $extraerValor($otrasInfo, 'Tipo Veh');  // Ej: SEDAN
         $nombreColor = $extraerValor($otrasInfo, 'Color 1');
 
         // Si el modelo trae la cilindrada en el nombre (ej. "GOL 1.6 CL COUPE"), sugerimos "1600"
@@ -219,6 +242,8 @@ class VehiculoIngresoController extends Controller
                 'modelo' => $nombreModelo,
                 'anio' => is_numeric($anio) ? (int) $anio : (int) date('Y'),
                 'cilindraje' => $cilindraje,
+                'servicio' => $servicio,
+                'tipo_vehiculo' => $tipoVehiculo,
                 'id_marca' => $marca ? $marca->id_marca : '',
                 'id_pais' => $pais ? $pais->id_pais : '',
                 'id_color' => $color ? $color->id_color : '',

@@ -26,13 +26,10 @@ class VehiculoIngresoControllerTest extends TestCase
             ->has('combustibles', 1)
             ->where('combustibles.0.id_tipo_combustible', $catalogIds['id_tipo_combustible'])
             ->where('combustibles.0.nombre', 'Gasolina')
-            ->has('estados', 1)
-            ->where('estados.0.id_estado', $catalogIds['id_estado'])
-            ->where('estados.0.nombre', 'Disponible')
         );
     }
 
-    public function test_authenticated_user_can_create_a_vehicle_with_a_fuel_type(): void
+    public function test_authenticated_user_can_create_a_vehicle_without_optional_purchase_fields(): void
     {
         $catalogIds = $this->createCatalogs();
 
@@ -45,9 +42,7 @@ class VehiculoIngresoControllerTest extends TestCase
                 'motor' => 'MOTOR-TEST-001',
                 'chasis' => 'CHASIS-TEST-001',
                 'cilindraje' => '1800 cc',
-                'kilometraje' => 12000,
                 'costo_adquisicion' => 18000,
-                'precio_venta' => 21500,
             ]);
 
         $response->assertRedirect(route('vehiculos.create'));
@@ -55,8 +50,70 @@ class VehiculoIngresoControllerTest extends TestCase
             'id_vehiculo' => 'PBA-1234',
             'chasis' => 'CHASIS-TEST-001',
             'id_tipo_combustible' => $catalogIds['id_tipo_combustible'],
+            'id_estado' => DB::table('estado_vehiculos')->where('nombre', 'Creado')->value('id_estado'),
+            'id_patio' => null,
+            'id_proveedor' => null,
+            'kilometraje' => null,
+            'precio_venta' => null,
+            'id_tipo_vehiculo' => null,
+            'id_servicio' => null,
         ]);
 
+    }
+
+    public function test_vehicle_type_and_service_values_are_reused_from_catalogs(): void
+    {
+        $catalogIds = $this->createCatalogs();
+        $user = User::factory()->create();
+        $vehicleData = [
+            ...$catalogIds,
+            'modelo' => 'Corolla',
+            'anio' => 2024,
+            'motor' => 'MOTOR-TEST-007',
+            'chasis' => 'CHASIS-TEST-007',
+            'cilindraje' => '1800 cc',
+            'costo_adquisicion' => 18000,
+            'tipo_vehiculo' => ' sedan ',
+            'servicio' => ' uso particular ',
+        ];
+
+        $this->actingAs($user)->post(route('vehiculos.store'), [
+            ...$vehicleData,
+            'id_vehiculo' => 'PBF-6789',
+        ])->assertRedirect(route('vehiculos.create'));
+
+        $this->actingAs($user)->post(route('vehiculos.store'), [
+            ...$vehicleData,
+            'id_vehiculo' => 'PBG-7890',
+            'motor' => 'MOTOR-TEST-008',
+            'chasis' => 'CHASIS-TEST-008',
+        ])->assertRedirect(route('vehiculos.create'));
+
+        $tipoVehiculoId = DB::table('tipo_vehiculos')
+            ->where('nombre', 'SEDAN')
+            ->value('id_tipo_vehiculo');
+        $servicioId = DB::table('servicios')
+            ->where('nombre', 'USO PARTICULAR')
+            ->value('id_servicio');
+
+        $this->assertDatabaseCount('tipo_vehiculos', 1);
+        $this->assertDatabaseCount('servicios', 1);
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBF-6789',
+            'id_tipo_vehiculo' => $tipoVehiculoId,
+            'id_servicio' => $servicioId,
+        ]);
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBG-7890',
+            'id_tipo_vehiculo' => $tipoVehiculoId,
+            'id_servicio' => $servicioId,
+        ]);
+
+        $this->get(route('vehiculos.index'))
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('vehiculos.0.tipo_vehiculo.nombre', 'SEDAN')
+                ->where('vehiculos.0.servicio.nombre', 'USO PARTICULAR')
+            );
     }
 
     public function test_authenticated_user_can_create_a_vehicle_with_multiple_images(): void
@@ -267,8 +324,6 @@ class VehiculoIngresoControllerTest extends TestCase
             'color_vehiculos' => ['id_color', 'Blanco'],
             'tipo_combustibles' => ['id_tipo_combustible', 'Gasolina'],
             'transmisiones' => ['id_transmision', 'Automatica'],
-            'patios' => ['id_patio', 'Patio Quito'],
-            'estado_vehiculos' => ['id_estado', 'Disponible'],
         ];
 
         $ids = [];
@@ -280,16 +335,6 @@ class VehiculoIngresoControllerTest extends TestCase
                 'updated_at' => now(),
             ], $primaryKey);
         }
-
-        $ids['id_proveedor'] = DB::table('proveedores')->insertGetId([
-            'nombre' => 'Proveedor de Prueba',
-            'cedula' => '1234567890',
-            'correo' => 'proveedor-test@example.test',
-            'direccion' => 'Direccion de prueba',
-            'ruta_cedula' => 'documentos/proveedor-test.pdf',
-            'created_at' => now(),
-            'updated_at' => now(),
-        ], 'id_proveedor');
 
         return $ids;
     }

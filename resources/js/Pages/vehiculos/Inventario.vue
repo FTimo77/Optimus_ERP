@@ -116,7 +116,7 @@ const formatearFecha = (fecha) => {
                                         {{ auto.patio?.nombre }}
                                     </td>
                                     <td class="px-6 py-4 text-sm font-bold text-green-700">
-                                        ${{ Number(auto.precio_venta).toLocaleString('en-US', { minimumFractionDigits: 2 }) }}
+                                        {{ auto.precio_venta != null ? `$${Number(auto.precio_venta).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'No definido' }}
                                     </td>
                                     <td class="px-6 py-4 text-sm">
                                         <span class="px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-300">
@@ -274,6 +274,14 @@ const formatearFecha = (fecha) => {
                                     <strong class="text-gray-900">{{ vehiculoSeleccionado.modelo }}</strong>
                                 </div>
                                 <div class="p-3 bg-gray-50 rounded border">
+                                    <span class="text-gray-500 text-xs block">Tipo de Vehículo</span>
+                                    <strong class="text-gray-900">{{ vehiculoSeleccionado.tipo_vehiculo?.nombre || 'No especificado' }}</strong>
+                                </div>
+                                <div class="p-3 bg-gray-50 rounded border">
+                                    <span class="text-gray-500 text-xs block">Tipo de Servicio</span>
+                                    <strong class="text-gray-900">{{ vehiculoSeleccionado.servicio?.nombre || 'No especificado' }}</strong>
+                                </div>
+                                <div class="p-3 bg-gray-50 rounded border">
                                     <span class="text-gray-500 text-xs block">Clase de Vehículo</span>
                                     <strong class="text-gray-900">{{ vehiculoSeleccionado.clase?.nombre }}</strong>
                                 </div>
@@ -299,7 +307,7 @@ const formatearFecha = (fecha) => {
                                 </div>
                                 <div class="p-3 bg-gray-50 rounded border col-span-2">
                                     <span class="text-gray-500 text-xs block">Recorrido Actual (Kilometraje)</span>
-                                    <strong class="text-gray-900 text-base">{{ Number(vehiculoSeleccionado.kilometraje).toLocaleString() }} km</strong>
+                                    <strong class="text-gray-900 text-base">{{ vehiculoSeleccionado.kilometraje != null ? `${Number(vehiculoSeleccionado.kilometraje).toLocaleString()} km` : 'No definido' }}</strong>
                                 </div>
                                 <div class="p-3 bg-gray-50 rounded border col-span-2">
                                     <span class="text-gray-500 text-xs block">Patio / Sucursal Asignada</span>

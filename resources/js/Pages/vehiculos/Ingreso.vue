@@ -12,9 +12,7 @@ const props = defineProps({
     colores: Array,
     combustibles: Array,
     transmisiones: Array,
-    patios: Array,
-    estados: Array,
-    proveedores: Array,
+    success: String,
 });
 
 // 2. Copias reactivas de los catálogos (por si el buscador agrega una marca, color o país nuevo en vivo)
@@ -38,17 +36,14 @@ const form = useForm({
     id_color: '',
     id_tipo_combustible: '',
     id_transmision: '',
-    id_patio: '',
-    id_estado: '',
-    id_proveedor: '',
     modelo: '',
     anio: new Date().getFullYear(),
     motor: '',
     chasis: '',
     cilindraje: '',
-    kilometraje: 0,
+    servicio: '',
+    tipo_vehiculo: '',
     costo_adquisicion: '',
-    precio_venta: '',
     imagenes: [],
 });
 
@@ -93,6 +88,8 @@ const buscarPorPlaca = async () => {
             if (v.id_pais) form.id_pais = v.id_pais;
             if (v.id_color) form.id_color = v.id_color;
             if (v.id_clase) form.id_clase = v.id_clase;
+            if (v.servicio) form.servicio = v.servicio;
+            if (v.tipo_vehiculo) form.tipo_vehiculo = v.tipo_vehiculo;
 
             tipoMensaje.value = 'exito';
             mensajePlaca.value = '¡Datos del vehículo cargados automáticamente! Completa los campos restantes.';
@@ -114,7 +111,6 @@ const enviarFormulario = () => {
                 imagenesInput.value.value = '';
             }
             mensajePlaca.value = '';
-            alert('¡Vehículo guardado exitosamente en la base de datos!');
         },
     });
 };
@@ -166,9 +162,43 @@ const enviarFormulario = () => {
                         </div>
                     </div>
 
+                    <div
+                        v-if="cargandoPlaca"
+                        role="progressbar"
+                        aria-label="Buscando información de la placa"
+                        class="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-700"
+                    >
+                        <div class="loading-bar__indicator h-full w-1/3 rounded-full bg-yellow-400"></div>
+                    </div>
+
                     <!-- Mensaje de estado de la búsqueda -->
                     <div v-if="mensajePlaca" class="mt-3 pt-3 border-t border-gray-700 text-xs font-semibold" :class="tipoMensaje === 'exito' ? 'text-green-400' : 'text-amber-400'">
                         {{ mensajePlaca }}
+                    </div>
+                </div>
+
+                <div
+                    v-if="success"
+                    role="status"
+                    aria-live="polite"
+                    class="mb-6 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-900 shadow-sm"
+                >
+                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            class="h-6 w-6"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            aria-hidden="true"
+                        >
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                    </div>
+                    <div class="pt-1">
+                        <p class="font-semibold">Vehículo registrado</p>
+                        <p class="mt-1 text-sm text-emerald-800">{{ success }}</p>
                     </div>
                 </div>
 
@@ -190,18 +220,40 @@ const enviarFormulario = () => {
                             <label for="imagenes" class="block text-sm font-medium text-gray-700">
                                 Imágenes del vehículo (opcional, máximo 10)
                             </label>
-                            <input
-                                id="imagenes"
-                                ref="imagenesInput"
-                                type="file"
-                                accept="image/jpeg,image/png,image/webp"
-                                multiple
-                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
-                                @input="form.imagenes = Array.from($event.target.files ?? [])"
-                            />
-                            <p class="mt-1 text-xs text-gray-500">
-                                JPG, PNG o WebP; máximo 5 MB por imagen.
-                            </p>
+                            <div class="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
+                                <input
+                                    id="imagenes"
+                                    ref="imagenesInput"
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    multiple
+                                    aria-describedby="imagenes-ayuda"
+                                    class="peer sr-only"
+                                    @input="form.imagenes = Array.from($event.target.files ?? [])"
+                                />
+                                <label
+                                    for="imagenes"
+                                    class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2.5 text-sm font-bold text-gray-900 shadow-sm transition hover:bg-yellow-400 peer-focus-visible:ring-2 peer-focus-visible:ring-yellow-500 peer-focus-visible:ring-offset-2"
+                                >
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        class="h-5 w-5"
+                                        fill="none"
+                                        viewBox="0 0 24 24"
+                                        stroke="currentColor"
+                                        stroke-width="1.8"
+                                        aria-hidden="true"
+                                    >
+                                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                                        <circle cx="8.5" cy="8.5" r="1.5" />
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="m21 15-5-5L5 21" />
+                                    </svg>
+                                    Añadir imágenes
+                                </label>
+                                <p id="imagenes-ayuda" class="text-xs text-gray-500">
+                                    JPG, PNG o WebP; máximo 5 MB por imagen.
+                                </p>
+                            </div>
                             <p v-if="form.imagenes.length" class="mt-1 text-xs text-gray-600">
                                 {{ form.imagenes.length }} imagen(es) seleccionada(s).
                             </p>
@@ -249,6 +301,16 @@ const enviarFormulario = () => {
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Modelo</label>
                                 <input v-model="form.modelo" type="text" placeholder="Ej: Hilux / Gol" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Tipo de Vehículo</label>
+                                <input v-model="form.tipo_vehiculo" type="text" placeholder="Ej: SEDAN / COUPE" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm uppercase" />
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Tipo de Servicio</label>
+                                <input v-model="form.servicio" type="text" placeholder="Ej: USO PARTICULAR" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm uppercase" />
                             </div>
 
                             <div>
@@ -311,50 +373,10 @@ const enviarFormulario = () => {
                     <!-- SECCIÓN 3: Negociación y Ubicación -->
                     <div>
                         <h3 class="text-lg font-bold text-gray-800 border-b pb-2 mb-4">3. Datos de Compra y Recepción</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Kilometraje</label>
-                                <input v-model="form.kilometraje" type="number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Costo Adquisición ($)</label>
                                 <input v-model="form.costo_adquisicion" type="number" step="0.01" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Precio Venta Sugerido ($)</label>
-                                <input v-model="form.precio_venta" type="number" step="0.01" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Proveedor</label>
-                                <select v-model="form.id_proveedor" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in proveedores" :key="item.id_proveedor" :value="item.id_proveedor">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Patio / Ubicación</label>
-                                <select v-model="form.id_patio" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in patios" :key="item.id_patio" :value="item.id_patio">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Estado</label>
-                                <select v-model="form.id_estado" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in estados" :key="item.id_estado" :value="item.id_estado">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
                             </div>
                         </div>
                     </div>
@@ -369,3 +391,26 @@ const enviarFormulario = () => {
         </div>
     </AuthenticatedLayout>
 </template>
+
+<style scoped>
+@keyframes loading-bar {
+    from {
+        transform: translateX(-100%);
+    }
+
+    to {
+        transform: translateX(300%);
+    }
+}
+
+.loading-bar__indicator {
+    animation: loading-bar 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .loading-bar__indicator {
+        animation: none;
+        width: 100%;
+    }
+}
+</style>

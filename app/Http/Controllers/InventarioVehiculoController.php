@@ -18,6 +18,8 @@ class InventarioVehiculoController extends Controller
             'color',
             'tipo_combustible',
             'transmision',
+            'tipoVehiculo',
+            'servicio',
             'patio',
             'estado',
             'proveedor',

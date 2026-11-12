@@ -18,7 +18,7 @@ class VehiculoSeeder extends Seeder
                 'tipo_combustibles' => ['id_tipo_combustible', ['Gasolina', 'Diesel', 'Hibrido']],
                 'transmisiones' => ['id_transmision', ['Automatica', 'Manual']],
                 'patios' => ['id_patio', ['Patio Quito', 'Patio Guayaquil']],
-                'estado_vehiculos' => ['id_estado', ['Disponible', 'En preparacion']],
+                'estado_vehiculos' => ['id_estado', ['Creado', 'Disponible', 'En preparacion']],
             ];
 
             $catalogIds = [];

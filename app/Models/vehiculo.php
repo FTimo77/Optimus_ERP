@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Vehiculo extends Model
@@ -21,6 +22,8 @@ class Vehiculo extends Model
         'id_color',
         'id_tipo_combustible',
         'id_transmision',
+        'id_tipo_vehiculo',
+        'id_servicio',
         'id_patio',
         'id_estado',
         'id_proveedor',
@@ -78,6 +81,16 @@ class Vehiculo extends Model
     public function proveedor()
     {
         return $this->belongsTo(Proveedor::class, 'id_proveedor', 'id_proveedor');
+    }
+
+    public function tipoVehiculo(): BelongsTo
+    {
+        return $this->belongsTo(TipoVehiculo::class, 'id_tipo_vehiculo', 'id_tipo_vehiculo');
+    }
+
+    public function servicio(): BelongsTo
+    {
+        return $this->belongsTo(Servicio::class, 'id_servicio', 'id_servicio');
     }
 
     public function imagenPrincipal(): HasOne
