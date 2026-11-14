@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\InventarioVehiculoController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\ValidacionDocumentosController;
 use App\Http\Controllers\VehiculoIngresoController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -33,6 +34,18 @@ Route::middleware(['auth'])->group(function () {
 
     Route::post('/vehiculos/consultar-axis', [VehiculoIngresoController::class, 'consultarAxisCloud'])
         ->name('vehiculos.consultar.axis');
+
+    Route::post('/vehiculos/escanear-matricula', [VehiculoIngresoController::class, 'escanearYCompararMatricula'])
+        ->name('vehiculos.escanear.matricula');
+
+    Route::get('/validacion-documentos', [ValidacionDocumentosController::class, 'index'])
+        ->name('validacion-documentos.index');
+    Route::get('/validacion-documentos/{validacion}', [ValidacionDocumentosController::class, 'show'])
+        ->name('validacion-documentos.show');
+    Route::get('/validacion-documentos/{validacion}/documento', [ValidacionDocumentosController::class, 'documento'])
+        ->name('validacion-documentos.documento');
+    Route::patch('/validacion-documentos/{validacion}', [ValidacionDocumentosController::class, 'decidir'])
+        ->name('validacion-documentos.decidir');
 });
 
 Route::middleware('auth')->group(function () {

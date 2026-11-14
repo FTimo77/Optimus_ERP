@@ -54,6 +54,12 @@ const showingNavigationDropdown = ref(false);
                                     >
                                     Inventario de Vehículos
                                 </NavLink>
+                                <NavLink
+                                    :href="route('validacion-documentos.index')"
+                                    :active="route().current('validacion-documentos.*')"
+                                >
+                                    Validación de documentos
+                                </NavLink>
                             </div>
                         </div>
 
@@ -160,6 +166,24 @@ const showingNavigationDropdown = ref(false);
                             :active="route().current('dashboard')"
                         >
                             Página Principal
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink
+                            :href="route('vehiculos.create')"
+                            :active="route().current('vehiculos.create')"
+                        >
+                            Ingresar Vehículo
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink
+                            :href="route('vehiculos.index')"
+                            :active="route().current('vehiculos.index')"
+                        >
+                            Inventario de Vehículos
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink
+                            :href="route('validacion-documentos.index')"
+                            :active="route().current('validacion-documentos.*')"
+                        >
+                            Validación de documentos
                         </ResponsiveNavLink>
                     </div>
 
