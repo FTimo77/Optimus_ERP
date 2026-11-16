@@ -10,14 +10,19 @@ class ValidacionDocumento extends Model
     protected $fillable = [
         'placa',
         'ruta_documento',
+        'ruta_cuv',
         'mime_type',
         'datos_documento',
         'datos_oficiales',
         'comparacion',
+        'resumen_auditoria',
+        'datos_ingreso',
         'alertas_criticas',
         'estado_revision',
         'subido_por',
         'revisado_por',
+        'comentario_solicitud',
+        'comentario_reenvio',
         'comentario_revision',
         'revisado_en',
     ];
@@ -31,6 +36,8 @@ class ValidacionDocumento extends Model
             'datos_documento' => 'encrypted:array',
             'datos_oficiales' => 'encrypted:array',
             'comparacion' => 'encrypted:array',
+            'resumen_auditoria' => 'encrypted:array',
+            'datos_ingreso' => 'encrypted:array',
             'alertas_criticas' => 'integer',
             'revisado_en' => 'datetime',
         ];

@@ -5,6 +5,8 @@ namespace Tests\Feature;
 use App\Models\User;
 use App\Models\ValidacionDocumento;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
@@ -17,6 +19,7 @@ class ValidacionDocumentosControllerTest extends TestCase
     {
         $uploader = User::factory()->create();
         $validacion = $this->createValidacion($uploader);
+        $this->createValidacion($uploader, ['estado_revision' => 'borrador']);
 
         $response = $this->actingAs(User::factory()->create())
             ->get(route('validacion-documentos.index'));
@@ -25,6 +28,7 @@ class ValidacionDocumentosControllerTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->component('ValidacionDocumentos/Index')
                 ->where('pendientes', 1)
+                ->where('validaciones.total', 1)
                 ->where('validaciones.data.0.id', $validacion->id)
                 ->where('validaciones.data.0.placa', 'PBA1234')
                 ->where('validaciones.data.0.marca', 'Toyota')
@@ -34,7 +38,16 @@ class ValidacionDocumentosControllerTest extends TestCase
 
     public function test_authenticated_user_can_open_a_review_case(): void
     {
-        $validacion = $this->createValidacion(User::factory()->create());
+        $validacion = $this->createValidacion(User::factory()->create(), [
+            'comentario_solicitud' => 'Revisar el costo declarado.',
+            'ruta_cuv' => 'validacion-documentos/cuv/cuv.pdf',
+            'datos_ingreso' => [
+                'id_vehiculo' => 'PBA1234',
+                'modelo' => 'Corolla',
+                'costo_adquisicion' => 18000,
+                'imagenes' => [],
+            ],
+        ]);
 
         $response = $this->actingAs(User::factory()->create())
             ->get(route('validacion-documentos.show', $validacion));
@@ -46,8 +59,30 @@ class ValidacionDocumentosControllerTest extends TestCase
                 ->where('validacion.placa', 'PBA1234')
                 ->where('validacion.estado_revision', 'pendiente')
                 ->where('validacion.comparacion.0.estado', 'coincide')
+                ->where('validacion.comentario_solicitud', 'Revisar el costo declarado.')
+                ->where('validacion.puede_reenviar', false)
+                ->where('validacion.datos_ingreso.costo_adquisicion', 18000)
                 ->where('validacion.documento_url', route('validacion-documentos.documento', $validacion))
+                ->where('validacion.cuv_url', route('validacion-documentos.cuv', $validacion))
             );
+    }
+
+    public function test_a_draft_is_hidden_from_other_users(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('validacion-documentos/borrador.jpg', 'matricula privada');
+        $borrador = $this->createValidacion(User::factory()->create(), [
+            'estado_revision' => 'borrador',
+            'ruta_documento' => 'validacion-documentos/borrador.jpg',
+        ]);
+        $otroUsuario = User::factory()->create();
+
+        $this->actingAs($otroUsuario)
+            ->get(route('validacion-documentos.show', $borrador))
+            ->assertNotFound();
+        $this->actingAs($otroUsuario)
+            ->get(route('validacion-documentos.documento', $borrador))
+            ->assertNotFound();
     }
 
     public function test_authenticated_user_can_download_the_private_registration_document(): void
@@ -66,15 +101,44 @@ class ValidacionDocumentosControllerTest extends TestCase
             ->assertStreamedContent('matricula privada');
     }
 
+    public function test_authenticated_user_can_download_the_private_cuv(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('validacion-documentos/cuv/cuv.pdf', 'cuv privado');
+        $validacion = $this->createValidacion(User::factory()->create(), [
+            'ruta_cuv' => 'validacion-documentos/cuv/cuv.pdf',
+        ]);
+
+        $this->actingAs(User::factory()->create())
+            ->get(route('validacion-documentos.cuv', $validacion))
+            ->assertDownload('cuv_PBA1234.pdf')
+            ->assertStreamedContent('cuv privado');
+    }
+
     public function test_authenticated_user_can_approve_a_document_with_a_comment(): void
     {
+        Storage::fake('local');
+        $catalogIds = $this->createCatalogs();
         $reviewer = User::factory()->create();
-        $validacion = $this->createValidacion(User::factory()->create());
+        $validacion = $this->createValidacion(User::factory()->create(), [
+            'datos_ingreso' => [
+                ...$catalogIds,
+                'id_vehiculo' => 'PBA1234',
+                'modelo' => 'Corolla',
+                'anio' => 2024,
+                'motor' => 'MOTOR-APPROVED-001',
+                'chasis' => 'CHASIS-APPROVED-001',
+                'cilindraje' => '1800 cc',
+                'costo_adquisicion' => 18000,
+                'imagenes' => [],
+            ],
+        ]);
 
         $response = $this->actingAs($reviewer)
             ->patch(route('validacion-documentos.decidir', $validacion), [
                 'decision' => 'aprobada',
                 'comentario_revision' => 'Datos verificados contra el documento.',
+                'documento_cuv' => UploadedFile::fake()->create('cuv.pdf', 100, 'application/pdf'),
             ]);
 
         $response->assertRedirect(route('validacion-documentos.show', $validacion));
@@ -85,17 +149,33 @@ class ValidacionDocumentosControllerTest extends TestCase
             'revisado_por' => $reviewer->id,
         ]);
         $this->assertNotNull($validacion->fresh()->revisado_en);
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'id_marca' => $catalogIds['id_marca'],
+            'modelo' => 'Corolla',
+            'id_estado' => DB::table('estado_vehiculos')->where('nombre', 'Creado')->value('id_estado'),
+        ]);
+        $rutaCuv = $validacion->fresh()->ruta_cuv;
+        $this->assertIsString($rutaCuv);
+        Storage::disk('local')->assertExists($rutaCuv);
+        $this->assertDatabaseHas('documentos_vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'ruta_cuv' => $rutaCuv,
+        ]);
     }
 
     public function test_authenticated_user_can_reject_a_document_without_a_comment(): void
     {
+        Storage::fake('local');
         $reviewer = User::factory()->create();
         $validacion = $this->createValidacion(User::factory()->create());
 
         $response = $this->actingAs($reviewer)
-            ->patch(route('validacion-documentos.decidir', $validacion), [
+            ->post(route('validacion-documentos.decidir', $validacion), [
+                '_method' => 'PATCH',
                 'decision' => 'rechazada',
                 'comentario_revision' => '   ',
+                'documento_cuv' => UploadedFile::fake()->create('cuv.pdf', 100, 'application/pdf'),
             ]);
 
         $response->assertRedirect(route('validacion-documentos.show', $validacion));
@@ -104,6 +184,136 @@ class ValidacionDocumentosControllerTest extends TestCase
             'estado_revision' => 'rechazada',
             'comentario_revision' => null,
             'revisado_por' => $reviewer->id,
+        ]);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => $validacion->placa,
+        ]);
+        $rutaCuv = $validacion->fresh()->ruta_cuv;
+        $this->assertIsString($rutaCuv);
+        Storage::disk('local')->assertExists($rutaCuv);
+        $this->assertDatabaseMissing('documentos_vehiculos', [
+            'id_vehiculo' => $validacion->placa,
+        ]);
+    }
+
+    public function test_review_decision_rejects_an_invalid_cuv_file(): void
+    {
+        Storage::fake('local');
+        $validacion = $this->createValidacion(User::factory()->create());
+
+        $response = $this->actingAs(User::factory()->create())
+            ->from(route('validacion-documentos.show', $validacion))
+            ->patch(route('validacion-documentos.decidir', $validacion), [
+                'decision' => 'rechazada',
+                'documento_cuv' => UploadedFile::fake()->create('cuv.txt', 100, 'text/plain'),
+            ]);
+
+        $response->assertRedirectBack()
+            ->assertSessionHasErrors('documento_cuv');
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'pendiente',
+            'ruta_cuv' => null,
+        ]);
+        Storage::disk('local')->assertEmpty();
+    }
+
+    public function test_submitter_can_resubmit_a_rejected_request_with_a_comment(): void
+    {
+        $submitter = User::factory()->create();
+        $reviewer = User::factory()->create();
+        $validacion = $this->createValidacion($submitter, [
+            'estado_revision' => 'rechazada',
+            'comentario_revision' => 'Verifica el número de chasis.',
+            'revisado_por' => $reviewer->id,
+            'revisado_en' => now()->subMinute(),
+        ]);
+
+        $this->actingAs($submitter)
+            ->get(route('validacion-documentos.show', $validacion))
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('validacion.estado_revision', 'rechazada')
+                ->where('validacion.puede_reenviar', true)
+                ->where('validacion.comentario_revision', 'Verifica el número de chasis.')
+            );
+
+        $response = $this->actingAs($submitter)
+            ->post(route('validacion-documentos.reenviar', $validacion), [
+                'comentario_reenvio' => 'Adjunto la información corregida del chasis.',
+            ]);
+
+        $response->assertRedirect(route('validacion-documentos.show', $validacion));
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'pendiente',
+            'comentario_reenvio' => 'Adjunto la información corregida del chasis.',
+            'comentario_revision' => 'Verifica el número de chasis.',
+            'revisado_por' => null,
+            'revisado_en' => null,
+        ]);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => $validacion->placa,
+        ]);
+    }
+
+    public function test_only_the_original_submitter_can_resubmit_a_rejected_request(): void
+    {
+        $validacion = $this->createValidacion(User::factory()->create(), [
+            'estado_revision' => 'rechazada',
+        ]);
+
+        $this->actingAs(User::factory()->create())
+            ->post(route('validacion-documentos.reenviar', $validacion), [
+                'comentario_reenvio' => 'Intento reenviar el expediente.',
+            ])
+            ->assertNotFound();
+
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'rechazada',
+        ]);
+    }
+
+    public function test_resubmission_requires_a_non_empty_comment(): void
+    {
+        $submitter = User::factory()->create();
+        $validacion = $this->createValidacion($submitter, [
+            'estado_revision' => 'rechazada',
+        ]);
+
+        $response = $this->actingAs($submitter)
+            ->from(route('validacion-documentos.show', $validacion))
+            ->post(route('validacion-documentos.reenviar', $validacion), [
+                'comentario_reenvio' => '   ',
+            ]);
+
+        $response->assertRedirectBack()
+            ->assertSessionHasErrors('comentario_reenvio');
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'rechazada',
+            'comentario_reenvio' => null,
+        ]);
+    }
+
+    public function test_a_case_without_acquisition_data_cannot_be_approved(): void
+    {
+        $validacion = $this->createValidacion(User::factory()->create());
+
+        $response = $this->actingAs(User::factory()->create())
+            ->from(route('validacion-documentos.show', $validacion))
+            ->patch(route('validacion-documentos.decidir', $validacion), [
+                'decision' => 'aprobada',
+            ]);
+
+        $response->assertRedirectBack()
+            ->assertSessionHasErrors('decision');
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'pendiente',
+        ]);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => $validacion->placa,
         ]);
     }
 
@@ -157,6 +367,8 @@ class ValidacionDocumentosControllerTest extends TestCase
             ->assertRedirect(route('login'));
         $this->get(route('validacion-documentos.documento', $validacion))
             ->assertRedirect(route('login'));
+        $this->get(route('validacion-documentos.cuv', $validacion))
+            ->assertRedirect(route('login'));
         $this->patch(route('validacion-documentos.decidir', $validacion), [
             'decision' => 'aprobada',
         ])->assertRedirect(route('login'));
@@ -194,5 +406,31 @@ class ValidacionDocumentosControllerTest extends TestCase
             'estado_revision' => 'pendiente',
             'subido_por' => $uploader->id,
         ], $attributes));
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function createCatalogs(): array
+    {
+        $catalogs = [
+            'marca_vehiculos' => ['id_marca', 'Toyota'],
+            'clase_vehiculos' => ['id_clase', 'Sedan'],
+            'paises' => ['id_pais', 'Japon'],
+            'color_vehiculos' => ['id_color', 'Blanco'],
+            'tipo_combustibles' => ['id_tipo_combustible', 'Gasolina'],
+            'transmisiones' => ['id_transmision', 'Automatica'],
+        ];
+        $ids = [];
+
+        foreach ($catalogs as $table => [$primaryKey, $name]) {
+            $ids[$primaryKey] = DB::table($table)->insertGetId([
+                'nombre' => $name,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], $primaryKey);
+        }
+
+        return $ids;
     }
 }

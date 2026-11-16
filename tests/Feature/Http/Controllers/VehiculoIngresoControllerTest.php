@@ -21,7 +21,7 @@ class FakeAxisVehiculoIngresoController extends VehiculoIngresoController
      */
     public static array $respuestaAxis = [];
 
-    protected function ejecutarConsultaAxis(string $placa, string $archivoTemp): int
+    protected function ejecutarAuditoriaCompleta(string $placa, string $archivoTemp): int
     {
         return file_put_contents($archivoTemp, json_encode(self::$respuestaAxis, JSON_THROW_ON_ERROR)) === false ? 1 : 0;
     }
@@ -62,6 +62,7 @@ class VehiculoIngresoControllerTest extends TestCase
 
     public function test_scan_returns_502_when_gemini_rejects_the_api_key(): void
     {
+        Storage::fake('local');
         Http::preventStrayRequests();
         Http::fake([
             'generativelanguage.googleapis.com/*' => Http::response([
@@ -79,8 +80,11 @@ class VehiculoIngresoControllerTest extends TestCase
             ], ['Accept' => 'application/json']);
 
         $response->assertStatus(502)
-            ->assertJsonPath('message', 'Gemini rechazó la clave o sus permisos. Confirma que la clave sea válida y que el proyecto tenga acceso a Gemini API.');
+            ->assertJsonPath('message', 'Gemini rechazó la clave o sus permisos. Confirma que la clave sea válida y que el proyecto tenga acceso a Gemini API.')
+            ->assertJsonPath('manual_review_available', true);
 
+        $this->assertDatabaseCount('validacion_documentos', 0);
+        Storage::disk('local')->assertEmpty();
         Http::assertSent(fn (ClientRequest $request): bool => $request->hasHeader('x-goog-api-key', 'test-gemini-api-key')
             && ! str_contains($request->url(), 'key='));
     }
@@ -104,7 +108,8 @@ class VehiculoIngresoControllerTest extends TestCase
             ], ['Accept' => 'application/json']);
 
         $response->assertStatus(502)
-            ->assertJsonPath('message', 'Gemini está temporalmente no disponible. El sistema reintentó una vez; espera un momento y vuelve a escanear.');
+            ->assertJsonPath('message', 'Gemini está temporalmente no disponible. El sistema reintentó una vez; espera un momento y vuelve a escanear.')
+            ->assertJsonPath('manual_review_available', true);
 
         Http::assertSentCount(2);
     }
@@ -158,25 +163,35 @@ class VehiculoIngresoControllerTest extends TestCase
             ], ['Accept' => 'application/json']);
 
         $response->assertOk()
-            ->assertJsonPath('estado_revision', 'pendiente')
+            ->assertJsonPath('estado_revision', 'borrador')
             ->assertJsonPath('datos_oficiales.fecha_matricula_desde', '16-06-2026 09:38:04')
             ->assertJsonPath('datos_oficiales.fecha_matricula_hasta', '31-03-2029 00:00:00')
             ->assertJsonPath('datos_oficiales.fecha_ultima_revision_desde', '20-03-2025 13:52:09')
             ->assertJsonPath('datos_oficiales.fecha_ultima_revision_hasta', '31-03-2026 00:00:00')
             ->assertJsonPath('datos_oficiales.anio_ultima_revision', '2025')
-            ->assertJsonPath('comparacion.6.estado', 'coincide')
-            ->assertJsonPath('comparacion.7.estado', 'coincide');
+            ->assertJsonPath('resumen_auditoria.multas.total', 0)
+            ->assertJsonPath('resumen_auditoria.sri.total', 0)
+            ->assertJsonPath('comparacion.7.estado', 'coincide')
+            ->assertJsonPath('comparacion.8.estado', 'coincide');
 
         $this->assertNotContains('fecha_revision', array_column($response->json('comparacion'), 'clave'));
 
         $validacion = ValidacionDocumento::findOrFail($response->json('validacion_id'));
 
         $this->assertSame('PBA1234', $validacion->placa);
-        $this->assertSame('pendiente', $validacion->estado_revision);
+        $this->assertSame('borrador', $validacion->estado_revision);
         $this->assertSame($response->json('datos_documento'), $validacion->datos_documento);
+        $this->assertSame(
+            $response->json('resumen_auditoria'),
+            $validacion->resumen_auditoria,
+        );
         $this->assertDatabaseHas('validacion_documentos', [
             'id' => $validacion->id,
             'subido_por' => $user->id,
+            'estado_revision' => 'borrador',
+        ]);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => $validacion->placa,
         ]);
         Storage::disk('local')->assertExists($validacion->ruta_documento);
 
@@ -188,6 +203,196 @@ class VehiculoIngresoControllerTest extends TestCase
                 && str_contains($prompt, '"fecha_caduca": ""')
                 && ! str_contains($prompt, '"fecha_revision": ""');
         });
+    }
+
+    public function test_audited_vehicle_stays_out_of_inventory_until_manually_approved(): void
+    {
+        Storage::fake('local');
+        Storage::fake('public');
+        $catalogIds = $this->createCatalogs();
+        $user = User::factory()->create();
+        $validacion = ValidacionDocumento::create([
+            'placa' => 'PBA1234',
+            'ruta_documento' => 'validacion-documentos/documento.jpg',
+            'mime_type' => 'image/jpeg',
+            'datos_documento' => ['placa' => 'PBA1234'],
+            'datos_oficiales' => ['placa' => 'PBA1234'],
+            'comparacion' => [],
+            'alertas_criticas' => 0,
+            'estado_revision' => 'borrador',
+            'subido_por' => $user->id,
+        ]);
+
+        $response = $this->actingAs($user)->post(route('vehiculos.store'), [
+            ...$catalogIds,
+            'id_vehiculo' => 'PBA-1234',
+            'modelo' => 'Corolla',
+            'anio' => 2024,
+            'motor' => 'MOTOR-REVIEW-001',
+            'chasis' => 'CHASIS-REVIEW-001',
+            'cilindraje' => '1800 cc',
+            'costo_adquisicion' => 18000,
+            'validacion_id' => $validacion->id,
+            'comentario_solicitud' => 'Favor revisar los datos de compra.',
+            'imagenes' => [UploadedFile::fake()->image('vehiculo.jpg')],
+        ]);
+
+        $response->assertRedirect(route('validacion-documentos.show', $validacion));
+        $validacionActualizada = $validacion->fresh();
+        $datosIngreso = $validacionActualizada->datos_ingreso;
+
+        $this->assertSame('pendiente', $validacionActualizada->estado_revision);
+        $this->assertSame('Favor revisar los datos de compra.', $validacionActualizada->comentario_solicitud);
+        $this->assertSame('PBA1234', $datosIngreso['id_vehiculo']);
+        $this->assertCount(1, $datosIngreso['imagenes']);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
+        Storage::disk('local')->assertExists($datosIngreso['imagenes'][0]);
+
+        $this->actingAs(User::factory()->create())
+            ->patch(route('validacion-documentos.decidir', $validacion), [
+                'decision' => 'aprobada',
+            ])
+            ->assertRedirect(route('validacion-documentos.show', $validacion));
+
+        $imagenPublica = DB::table('imagen_vehiculos')
+            ->where('id_vehiculo', 'PBA1234')
+            ->value('ruta_imagen');
+
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'aprobada',
+        ]);
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'costo_adquisicion' => 18000,
+        ]);
+        $this->assertDatabaseHas('imagen_vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'ruta_imagen' => $imagenPublica,
+            'es_principal' => true,
+        ]);
+        Storage::disk('local')->assertMissing($datosIngreso['imagenes'][0]);
+        Storage::disk('public')->assertExists($imagenPublica);
+    }
+
+    public function test_a_failed_ocr_document_can_be_sent_to_manual_review_and_approved(): void
+    {
+        Storage::fake('local');
+        $catalogIds = $this->createCatalogs();
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)->post(route('vehiculos.store'), [
+            ...$catalogIds,
+            'id_vehiculo' => 'PBA-1234',
+            'modelo' => 'Corolla',
+            'anio' => 2024,
+            'motor' => 'MOTOR-OCR-MANUAL-001',
+            'chasis' => 'CHASIS-OCR-MANUAL-001',
+            'cilindraje' => '1800 cc',
+            'costo_adquisicion' => 18000,
+            'comentario_solicitud' => 'La auditoría automática no estuvo disponible.',
+            'documento_matricula' => UploadedFile::fake()->image('matricula.jpg'),
+        ]);
+
+        $validacion = ValidacionDocumento::query()->where('placa', 'PBA1234')->firstOrFail();
+
+        $response->assertRedirect(route('validacion-documentos.show', $validacion));
+        $this->assertSame('pendiente', $validacion->estado_revision);
+        $this->assertSame('La auditoría automática no estuvo disponible.', $validacion->comentario_solicitud);
+        $this->assertSame('PBA1234', $validacion->datos_ingreso['id_vehiculo']);
+        $this->assertSame('ocr', $validacion->comparacion[0]['clave']);
+        Storage::disk('local')->assertExists($validacion->ruta_documento);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
+
+        $this->actingAs(User::factory()->create())
+            ->patch(route('validacion-documentos.decidir', $validacion), [
+                'decision' => 'aprobada',
+            ])
+            ->assertRedirect(route('validacion-documentos.show', $validacion));
+
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'costo_adquisicion' => 18000,
+        ]);
+    }
+
+    public function test_audited_vehicle_cannot_bypass_manual_review_and_enter_inventory(): void
+    {
+        $catalogIds = $this->createCatalogs();
+        $user = User::factory()->create();
+        ValidacionDocumento::create([
+            'placa' => 'PBA1234',
+            'ruta_documento' => 'validacion-documentos/documento.jpg',
+            'mime_type' => 'image/jpeg',
+            'datos_documento' => ['placa' => 'PBA1234'],
+            'datos_oficiales' => ['placa' => 'PBA1234'],
+            'comparacion' => [],
+            'alertas_criticas' => 0,
+            'estado_revision' => 'borrador',
+            'subido_por' => $user->id,
+        ]);
+
+        $response = $this->actingAs($user)
+            ->from(route('vehiculos.create'))
+            ->post(route('vehiculos.store'), [
+                ...$catalogIds,
+                'id_vehiculo' => 'PBA-1234',
+                'modelo' => 'Corolla',
+                'anio' => 2024,
+                'motor' => 'MOTOR-REVIEW-002',
+                'chasis' => 'CHASIS-REVIEW-002',
+                'cilindraje' => '1800 cc',
+                'costo_adquisicion' => 18000,
+            ]);
+
+        $response->assertRedirectBack()
+            ->assertSessionHasErrors('id_vehiculo');
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
+    }
+
+    public function test_only_the_uploader_can_send_an_audit_draft_for_review(): void
+    {
+        $catalogIds = $this->createCatalogs();
+        $uploader = User::factory()->create();
+        $validacion = ValidacionDocumento::create([
+            'placa' => 'PBA1234',
+            'ruta_documento' => 'validacion-documentos/documento.jpg',
+            'mime_type' => 'image/jpeg',
+            'datos_documento' => ['placa' => 'PBA1234'],
+            'datos_oficiales' => ['placa' => 'PBA1234'],
+            'comparacion' => [],
+            'alertas_criticas' => 0,
+            'estado_revision' => 'borrador',
+            'subido_por' => $uploader->id,
+        ]);
+
+        $response = $this->actingAs(User::factory()->create())
+            ->post(route('vehiculos.store'), [
+                ...$catalogIds,
+                'id_vehiculo' => 'PBA1234',
+                'modelo' => 'Corolla',
+                'anio' => 2024,
+                'motor' => 'MOTOR-REVIEW-003',
+                'chasis' => 'CHASIS-REVIEW-003',
+                'cilindraje' => '1800 cc',
+                'costo_adquisicion' => 18000,
+                'validacion_id' => $validacion->id,
+            ]);
+
+        $response->assertNotFound();
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'borrador',
+        ]);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
     }
 
     public function test_authenticated_user_can_create_a_vehicle_without_optional_purchase_fields(): void

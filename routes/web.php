@@ -44,6 +44,10 @@ Route::middleware(['auth'])->group(function () {
         ->name('validacion-documentos.show');
     Route::get('/validacion-documentos/{validacion}/documento', [ValidacionDocumentosController::class, 'documento'])
         ->name('validacion-documentos.documento');
+    Route::get('/validacion-documentos/{validacion}/cuv', [ValidacionDocumentosController::class, 'cuv'])
+        ->name('validacion-documentos.cuv');
+    Route::post('/validacion-documentos/{validacion}/reenviar', [ValidacionDocumentosController::class, 'reenviar'])
+        ->name('validacion-documentos.reenviar');
     Route::patch('/validacion-documentos/{validacion}', [ValidacionDocumentosController::class, 'decidir'])
         ->name('validacion-documentos.decidir');
 });

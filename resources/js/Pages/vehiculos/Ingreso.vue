@@ -1,6 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head, Link, useForm } from '@inertiajs/vue3';
+import { Head, useForm } from '@inertiajs/vue3';
 import { computed, ref } from 'vue';
 import axios from 'axios';
 
@@ -32,6 +32,9 @@ const mostrarFormularioIngreso = computed(() => ['particular', 'empresa'].includ
 // 4. Formulario conectado con las columnas de tu modelo Vehiculo.php
 const form = useForm({
     id_vehiculo: '',
+    validacion_id: null,
+    comentario_solicitud: '',
+    documento_matricula: null,
     id_marca: '',
     id_clase: '',
     id_pais: '',
@@ -121,23 +124,47 @@ const archivoMatricula = ref(null);
 const escaneandoIA = ref(false);
 const resultadoAuditoria = ref(null);
 const errorAuditoria = ref('');
+const erroresValidacionAuditoria = ref([]);
+const puedeEnviarRevisionManual = ref(false);
 
 const seleccionarMatricula = (e) => {
-    archivoMatricula.value = e.target.files[0];
+    archivoMatricula.value = e.target.files[0] || null;
+    errorAuditoria.value = '';
+    erroresValidacionAuditoria.value = [];
+    resultadoAuditoria.value = null;
+    puedeEnviarRevisionManual.value = false;
+    form.validacion_id = null;
+    form.comentario_solicitud = '';
+    form.documento_matricula = null;
+    form.clearErrors();
 };
 
 const escanearYComparar = async () => {
     if (!archivoMatricula.value) {
-        alert('Selecciona primero una foto o PDF de la matrícula.');
+        errorAuditoria.value = 'Selecciona primero una foto o PDF de la matrícula.';
+        erroresValidacionAuditoria.value = [];
         return;
     }
 
     escaneandoIA.value = true;
     errorAuditoria.value = '';
+    erroresValidacionAuditoria.value = [];
     resultadoAuditoria.value = null;
+    puedeEnviarRevisionManual.value = false;
+    form.validacion_id = null;
+    form.documento_matricula = null;
 
     const formData = new FormData();
     formData.append('documento', archivoMatricula.value);
+
+    const mostrarError = (respuesta, mensajeAlternativo) => {
+        errorAuditoria.value = respuesta?.message || mensajeAlternativo;
+        erroresValidacionAuditoria.value = Object.values(respuesta?.errors || {})
+            .flat()
+            .filter((mensaje) => typeof mensaje === 'string');
+        puedeEnviarRevisionManual.value = respuesta?.manual_review_available === true;
+        form.documento_matricula = puedeEnviarRevisionManual.value ? archivoMatricula.value : null;
+    };
 
     try {
         const res = await axios.post(route('vehiculos.escanear.matricula'), formData, {
@@ -146,11 +173,14 @@ const escanearYComparar = async () => {
 
         if (res.data && res.data.success) {
             resultadoAuditoria.value = res.data;
+            form.validacion_id = res.data.validacion_id;
+            puedeEnviarRevisionManual.value = false;
+            form.documento_matricula = null;
         } else {
-            errorAuditoria.value = res.data?.message || 'El servidor no devolvió una respuesta válida.';
+            mostrarError(res.data, 'El servidor no devolvió una respuesta válida.');
         }
     } catch (error) {
-        errorAuditoria.value = error.response?.data?.message || error.message || 'Error al escanear el documento.';
+        mostrarError(error.response?.data, error.message || 'Error al escanear el documento.');
     } finally {
         escaneandoIA.value = false;
     }
@@ -184,175 +214,7 @@ const escanearYComparar = async () => {
                     </select>
                 </div>
 
-                <!-- MÓDULO DE ESCANEO IA Y AUDITORÍA CRUZADA -->
-                <div
-                    v-if="categoriaSeleccionada === 'particular'"
-                    class="mb-6 rounded-lg border border-slate-700 bg-slate-900 p-5 text-white shadow-md"
-                >
-                    <div class="flex flex-col items-center justify-between gap-4 md:flex-row">
-                        <div>
-                            <h3 class="text-sm font-extrabold uppercase tracking-wider text-yellow-400">
-                                Escáner IA de Matrícula vs. AxisCloud
-                            </h3>
-                            <p class="mt-1 text-xs text-gray-300">
-                                Sube la foto o PDF de la matrícula para extraer sus datos con IA y compararlos con AxisCloud.
-                            </p>
-                            <p class="mt-1 text-xs text-gray-400">
-                                El documento se enviará a Google Gemini para su análisis. Revisa los resultados antes de registrar el vehículo.
-                            </p>
-                        </div>
-
-                        <div class="flex w-full items-center gap-3 md:w-auto">
-                            <input
-                                type="file"
-                                @change="seleccionarMatricula"
-                                accept="image/jpeg,image/png,image/webp,.pdf"
-                                aria-label="Seleccionar matrícula en PDF o imagen"
-                                class="text-xs text-gray-300 file:mr-3 file:rounded file:border-0 file:bg-gray-700 file:px-3 file:py-1.5 file:text-white hover:file:bg-gray-600"
-                            />
-                            <button
-                                type="button"
-                                @click="escanearYComparar"
-                                :disabled="escaneandoIA"
-                                class="whitespace-nowrap rounded bg-yellow-500 px-4 py-2 text-xs font-bold text-black shadow hover:bg-yellow-600 disabled:opacity-50"
-                            >
-                                {{ escaneandoIA ? 'Analizando con IA y AxisCloud...' : 'Auditar Matrícula' }}
-                            </button>
-                        </div>
-                    </div>
-
-                    <div
-                        v-if="errorAuditoria"
-                        role="alert"
-                        class="mt-3 rounded border border-red-500 bg-red-900/50 p-3 text-xs text-red-200"
-                    >
-                        {{ errorAuditoria }}
-                    </div>
-
-                    <div
-                        v-if="resultadoAuditoria"
-                        class="mt-5 rounded-lg border border-gray-700 bg-gray-800 p-4"
-                    >
-                        <div class="mb-3 flex flex-col justify-between gap-2 md:flex-row">
-                            <span
-                                class="text-xs font-bold uppercase tracking-wider"
-                                :class="resultadoAuditoria.alertas_criticas > 0
-                                    ? 'text-red-400'
-                                    : resultadoAuditoria.comparacion.some((item) => item.estado !== 'coincide')
-                                        ? 'text-amber-400'
-                                        : 'text-green-400'"
-                            >
-                                {{ resultadoAuditoria.alertas_criticas > 0
-                                    ? `¡Atención! Se detectaron ${resultadoAuditoria.alertas_criticas} discrepancias críticas (VIN/Motor/Placa)`
-                                    : resultadoAuditoria.comparacion.some((item) => item.estado !== 'coincide')
-                                        ? 'Revisión parcial: hay datos diferentes o no verificables'
-                                        : 'Verificación exitosa: datos comparados coinciden con AxisCloud' }}
-                            </span>
-                            <div class="text-xs text-gray-400">
-                                <p>
-                                    Propietario en documento:
-                                    <strong class="text-white">
-                                        {{ resultadoAuditoria.propietario_doc.nombre }}
-                                        ({{ resultadoAuditoria.propietario_doc.cedula }})
-                                    </strong>
-                                </p>
-                                <p>
-                                    Emisión: {{ resultadoAuditoria.datos_documento.fecha_emision || 'No detectada' }}
-                                    · Caducidad: {{ resultadoAuditoria.datos_documento.fecha_caduca || 'No detectada' }}
-                                </p>
-                                <p>
-                                    Última revisión en AxisCloud:
-                                    {{ resultadoAuditoria.datos_oficiales.fecha_ultima_revision_desde || 'No disponible' }}
-                                    · Vigente hasta:
-                                    {{ resultadoAuditoria.datos_oficiales.fecha_ultima_revision_hasta || 'No disponible' }}
-                                    · Año:
-                                    {{ resultadoAuditoria.datos_oficiales.anio_ultima_revision || 'No disponible' }}
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left text-xs text-gray-200">
-                                <thead class="bg-gray-900 uppercase text-gray-400">
-                                    <tr>
-                                        <th class="px-3 py-2">Campo</th>
-                                        <th class="px-3 py-2">Leído en matrícula (IA)</th>
-                                        <th class="px-3 py-2">Extraído de AxisCloud</th>
-                                        <th class="px-3 py-2 text-center">Estado</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-700">
-                                    <tr
-                                        v-for="item in resultadoAuditoria.comparacion"
-                                        :key="item.clave"
-                                        :class="item.estado === 'diferente' && item.critico
-                                            ? 'bg-red-950/40'
-                                            : item.estado === 'casi_coincide' && item.critico
-                                                ? 'bg-amber-950/40'
-                                                : ''"
-                                    >
-                                        <td class="px-3 py-2 font-semibold">{{ item.campo }}</td>
-                                        <td class="px-3 py-2 font-mono">{{ item.documento }}</td>
-                                        <td class="px-3 py-2 font-mono">{{ item.sistema_web }}</td>
-                                        <td class="px-3 py-2 text-center">
-                                            <!-- Exact or accepted equivalent match -->
-                                            <span
-                                                v-if="item.estado === 'coincide' || item.coincide"
-                                                class="rounded-full bg-green-900 px-2.5 py-0.5 text-[11px] font-bold text-green-300"
-                                            >
-                                                ✓ Coincide
-                                            </span>
-
-                                            <!-- Possible OCR difference in a serial number; manual review is required. -->
-                                            <div
-                                                v-else-if="item.estado === 'casi_coincide'"
-                                                class="flex flex-col items-center"
-                                            >
-                                                <span class="rounded-full bg-amber-700 px-2.5 py-0.5 text-[11px] font-bold text-yellow-200">
-                                                    ⚠ Casi idéntico
-                                                </span>
-                                                <span class="mt-0.5 text-[10px] text-yellow-400">
-                                                    {{ item.nota }}
-                                                </span>
-                                            </div>
-
-                                            <div
-                                                v-else-if="item.estado === 'no_verificable'"
-                                                class="flex flex-col items-center"
-                                            >
-                                                <span class="rounded-full bg-gray-700 px-2.5 py-0.5 text-[11px] font-bold text-gray-200">
-                                                    No verificable
-                                                </span>
-                                                <span v-if="item.nota" class="mt-0.5 text-center text-[10px] text-gray-400">
-                                                    {{ item.nota }}
-                                                </span>
-                                            </div>
-
-                                            <span
-                                                v-else
-                                                class="rounded-full bg-red-900 px-2.5 py-0.5 text-[11px] font-bold text-red-300"
-                                            >
-                                                ✕ Diferente
-                                            </span>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div class="mt-4 flex flex-col justify-between gap-3 rounded-md border border-blue-700 bg-blue-950/40 p-3 text-sm text-blue-100 sm:flex-row sm:items-center">
-                            <p>
-                                Expediente #{{ resultadoAuditoria.validacion_id }} creado y pendiente de revisión humana.
-                            </p>
-                            <Link
-                                :href="route('validacion-documentos.show', resultadoAuditoria.validacion_id)"
-                                class="inline-flex items-center justify-center rounded bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-500"
-                            >
-                                Abrir expediente
-                            </Link>
-                        </div>
-                    </div>
-                </div>
+                
 
                 <!-- BARRA DE AUTOCOMPLETADO POR PLACA (LIMPIA PARA EL USUARIO) -->
                 <div
@@ -436,7 +298,6 @@ const escanearYComparar = async () => {
                     @submit.prevent="enviarFormulario"
                     class="bg-white shadow-sm sm:rounded-lg p-6 space-y-6"
                 >
-                    
                     <!-- Alertas de error de validación en Laravel -->
                     <div v-if="Object.keys(form.errors).length > 0" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4">
                         <p class="font-bold text-red-700">Por favor corrige los siguientes errores:</p>
@@ -612,13 +473,462 @@ const escanearYComparar = async () => {
                             </div>
                         </div>
                     </div>
-
-                    <div class="flex justify-end pt-4 border-t">
-                        <button type="submit" :disabled="form.processing" class="px-6 py-2.5 bg-yellow-500 hover:bg-yellow-600 text-black font-bold rounded-md shadow disabled:opacity-50 transition">
-                            {{ form.processing ? 'Guardando...' : 'Registrar Adquisición' }}
-                        </button>
-                    </div>
                 </form>
+
+                <!-- MÓDULO DE ESCANEO IA Y AUDITORÍA CRUZADA (4 FUENTES) -->
+                <div
+                    v-if="categoriaSeleccionada === 'particular'"
+                    class="mb-6 rounded-lg border border-slate-700 bg-slate-900 p-5 text-white shadow-md"
+                >
+                    <div class="flex flex-col items-center justify-between gap-4 md:flex-row">
+                        <div>
+                            <h3 class="text-sm font-extrabold uppercase tracking-wider text-yellow-400">
+                                Escáner IA de Matrícula + Auditoría Oficial (AxisCloud · SRI · Autority · Propietario)
+                            </h3>
+                            <p class="mt-1 text-xs text-gray-300">
+                                Sube la foto o PDF de la matrícula para extraer sus datos con IA y validarlos contra las fuentes oficiales en tiempo real.
+                            </p>
+                            <p class="mt-1 text-xs text-gray-400">
+                                El documento se enviará a Google Gemini y se consultarán simultáneamente Propietario, Multas, Valores SRI y Ficha Técnica.
+                            </p>
+                        </div>
+
+                        <div class="flex w-full flex-col gap-3 md:w-auto md:flex-row md:items-end">
+                            <div>
+                                <label for="documento-matricula" class="mb-1 block text-xs font-semibold text-gray-200">
+                                    Matrícula
+                                </label>
+                                <input
+                                    id="documento-matricula"
+                                    type="file"
+                                    @change="seleccionarMatricula"
+                                    :disabled="escaneandoIA"
+                                    accept="image/jpeg,image/png,image/webp,.pdf"
+                                    aria-label="Seleccionar matrícula en PDF o imagen"
+                                    class="text-xs text-gray-300 file:mr-3 file:rounded file:border-0 file:bg-gray-700 file:px-3 file:py-1.5 file:text-white hover:file:bg-gray-600"
+                                />
+                            </div>
+                            <button
+                                type="button"
+                                @click="escanearYComparar"
+                                :disabled="escaneandoIA"
+                                class="whitespace-nowrap rounded bg-yellow-500 px-4 py-2 text-xs font-bold text-black shadow hover:bg-yellow-600 disabled:opacity-50"
+                            >
+                                {{ escaneandoIA ? 'Auditando IA + 4 Fuentes Web...' : 'Auditar Matrícula' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="escaneandoIA"
+                        role="progressbar"
+                        aria-label="Auditando matrícula"
+                        class="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-700"
+                    >
+                        <div class="loading-bar__indicator h-full w-1/3 rounded-full bg-yellow-400"></div>
+                    </div>
+
+                    <div
+                        v-if="errorAuditoria"
+                        role="alert"
+                        aria-live="assertive"
+                        class="mt-3 rounded border border-red-500 bg-red-900/50 p-3 text-xs text-red-200"
+                    >
+                        <p>{{ errorAuditoria }}</p>
+                        <ul
+                            v-if="erroresValidacionAuditoria.length"
+                            class="mt-2 list-inside list-disc space-y-1"
+                        >
+                            <li v-for="(error, index) in erroresValidacionAuditoria" :key="index">
+                                {{ error }}
+                            </li>
+                        </ul>
+                        <div
+                            v-if="puedeEnviarRevisionManual"
+                            class="mt-3 rounded border border-amber-400 bg-amber-950/50 p-3"
+                        >
+                            <p class="font-semibold text-amber-100">
+                                Puedes enviar la matrícula a revisión manual sin completar la auditoría automática.
+                            </p>
+                            <p class="mt-1 text-amber-200">
+                                Completa los datos de adquisición en el formulario y envía el documento; el vehículo quedará pendiente de aprobación.
+                            </p>
+                            <label for="comentario-solicitud-error" class="mt-3 block font-semibold text-amber-100">
+                                Comentario para quien revisa (opcional)
+                            </label>
+                            <textarea
+                                id="comentario-solicitud-error"
+                                v-model="form.comentario_solicitud"
+                                rows="3"
+                                maxlength="2000"
+                                class="mt-1 block w-full rounded-md border-gray-600 bg-gray-800 text-sm text-white shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                                placeholder="Agrega información útil para la revisión..."
+                            />
+                            <p v-if="form.errors.comentario_solicitud" class="mt-1 text-xs text-red-300">
+                                {{ form.errors.comentario_solicitud }}
+                            </p>
+                            <div class="mt-3 flex justify-end">
+                                <button
+                                    type="button"
+                                    @click="enviarFormulario"
+                                    :disabled="form.processing"
+                                    class="rounded bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+                                >
+                                    {{ form.processing ? 'Enviando expediente...' : 'Enviar a revisión manual' }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="resultadoAuditoria"
+                        class="mt-5 rounded-lg border border-gray-700 bg-gray-800 p-4"
+                    >
+                        <div class="mb-3 flex flex-col justify-between gap-2 md:flex-row">
+                            <span
+                                class="text-xs font-bold uppercase tracking-wider"
+                                :class="resultadoAuditoria.alertas_criticas > 0
+                                    ? 'text-red-400'
+                                    : resultadoAuditoria.comparacion.some((item) => item.estado !== 'coincide')
+                                        ? 'text-amber-400'
+                                        : 'text-green-400'"
+                            >
+                                {{ resultadoAuditoria.alertas_criticas > 0
+                                    ? `¡Atención! Se detectaron ${resultadoAuditoria.alertas_criticas} discrepancias críticas (VIN/Motor/Placa/Propietario)`
+                                    : resultadoAuditoria.comparacion.some((item) => item.estado !== 'coincide')
+                                        ? 'Revisión parcial: hay datos diferentes o no verificables'
+                                        : 'Verificación exitosa: datos comparados coinciden con los registros oficiales' }}
+                            </span>
+                            <div class="text-xs text-gray-400 space-y-0.5">
+                                <p>
+                                    Propietario en documento:
+                                    <strong class="text-white">
+                                        {{ resultadoAuditoria.propietario_doc.nombre }}
+                                        ({{ resultadoAuditoria.propietario_doc.cedula }})
+                                    </strong>
+                                </p>
+                                <p v-if="resultadoAuditoria.propietario_doc.nombre_web">
+                                    Propietario actual registrado (Web):
+                                    <strong class="text-yellow-300">
+                                        {{ resultadoAuditoria.propietario_doc.nombre_web }}
+                                    </strong>
+                                </p>
+                                <p>
+                                    Emisión: {{ resultadoAuditoria.datos_documento.fecha_emision || 'No detectada' }}
+                                    · Caducidad: {{ resultadoAuditoria.datos_documento.fecha_caduca || 'No detectada' }}
+                                </p>
+                                <p>
+                                    Última revisión en AxisCloud:
+                                    {{ resultadoAuditoria.datos_oficiales.fecha_ultima_revision_desde || 'No disponible' }}
+                                    · Vigente hasta:
+                                    {{ resultadoAuditoria.datos_oficiales.fecha_ultima_revision_hasta || 'No disponible' }}
+                                    · Año:
+                                    {{ resultadoAuditoria.datos_oficiales.anio_ultima_revision || 'No disponible' }}
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- TABLA COMPARATIVA MATRÍCULA VS REGISTROS OFICIALES -->
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-xs text-gray-200">
+                                <thead class="bg-gray-900 uppercase text-gray-400">
+                                    <tr>
+                                        <th class="px-3 py-2">Campo</th>
+                                        <th class="px-3 py-2">Leído en matrícula (IA)</th>
+                                        <th class="px-3 py-2">Extraído de Fuentes Oficiales</th>
+                                        <th class="px-3 py-2 text-center">Estado</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-700">
+                                    <tr
+                                        v-for="item in resultadoAuditoria.comparacion"
+                                        :key="item.clave"
+                                        :class="item.estado === 'diferente' && item.critico
+                                            ? 'bg-red-950/40'
+                                            : item.estado === 'casi_coincide' && item.critico
+                                                ? 'bg-amber-950/40'
+                                                : ''"
+                                    >
+                                        <td class="px-3 py-2 font-semibold">{{ item.campo }}</td>
+                                        <td class="px-3 py-2 font-mono">{{ item.documento }}</td>
+                                        <td class="px-3 py-2 font-mono">{{ item.sistema_web }}</td>
+                                        <td class="px-3 py-2 text-center">
+                                            <span
+                                                v-if="item.estado === 'coincide' || item.coincide"
+                                                class="rounded-full bg-green-900 px-2.5 py-0.5 text-[11px] font-bold text-green-300"
+                                            >
+                                                ✓ Coincide
+                                            </span>
+
+                                            <div
+                                                v-else-if="item.estado === 'casi_coincide'"
+                                                class="flex flex-col items-center"
+                                            >
+                                                <span class="rounded-full bg-amber-700 px-2.5 py-0.5 text-[11px] font-bold text-yellow-200">
+                                                    ⚠ Casi idéntico
+                                                </span>
+                                                <span class="mt-0.5 text-[10px] text-yellow-400">
+                                                    {{ item.nota }}
+                                                </span>
+                                            </div>
+
+                                            <div
+                                                v-else-if="item.estado === 'no_verificable'"
+                                                class="flex flex-col items-center"
+                                            >
+                                                <span class="rounded-full bg-gray-700 px-2.5 py-0.5 text-[11px] font-bold text-gray-200">
+                                                    No verificable
+                                                </span>
+                                                <span v-if="item.nota" class="mt-0.5 text-center text-[10px] text-gray-400">
+                                                    {{ item.nota }}
+                                                </span>
+                                            </div>
+
+                                            <div v-else class="flex flex-col items-center">
+                                                <span class="rounded-full bg-red-900 px-2.5 py-0.5 text-[11px] font-bold text-red-300">
+                                                    ✕ Diferente
+                                                </span>
+                                                <span v-if="item.nota" class="mt-0.5 text-center text-[10px] text-red-300">
+                                                    {{ item.nota }}
+                                                </span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- TARJETAS FINANCIERAS: MULTAS (AUTORITY) + VALORES DE MATRÍCULA (SRI) -->
+                        <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <!-- Tarjeta 1: Multas Autority -->
+                            <div
+                                class="rounded-lg border p-4"
+                                :class="resultadoAuditoria.multas?.tiene_multas
+                                    ? 'border-red-500 bg-red-950/40'
+                                    : 'border-green-600 bg-green-950/30'"
+                            >
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <h4
+                                            class="text-xs font-extrabold uppercase tracking-wider"
+                                            :class="resultadoAuditoria.multas?.tiene_multas ? 'text-red-400' : 'text-green-400'"
+                                        >
+                                            {{ resultadoAuditoria.multas?.tiene_multas
+                                                ? `🚨 ${resultadoAuditoria.multas.cantidad} Multa(s) Pendiente(s)`
+                                                : '✅ Sin Multas de Tránsito (Autority)' }}
+                                        </h4>
+                                        <p class="mt-0.5 text-[11px] text-gray-300">
+                                            Fuente: multas.autority.io
+                                        </p>
+                                    </div>
+                                    <span
+                                        class="font-mono text-lg font-extrabold"
+                                        :class="resultadoAuditoria.multas?.tiene_multas ? 'text-red-400' : 'text-green-400'"
+                                    >
+                                        ${{ Number(resultadoAuditoria.multas?.total || 0).toFixed(2) }}
+                                    </span>
+                                </div>
+
+                                <div
+                                    v-if="resultadoAuditoria.multas?.tiene_multas"
+                                    class="mt-3 max-h-44 overflow-y-auto border-t border-red-800/60 pt-2"
+                                >
+                                    <table class="w-full text-left text-[11px] text-gray-200">
+                                        <thead class="text-gray-400 uppercase">
+                                            <tr>
+                                                <th class="py-1 pr-2">Fecha / Entidad</th>
+                                                <th class="py-1 pr-2">Infracción</th>
+                                                <th class="py-1 text-right">Total</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-red-900/40">
+                                            <tr v-for="(multa, idx) in resultadoAuditoria.multas.listado" :key="idx">
+                                                <td class="py-1.5 pr-2 whitespace-nowrap">
+                                                    <div class="font-semibold">{{ multa.fecha }}</div>
+                                                    <div class="text-[10px] text-gray-400">{{ multa.entidad }}</div>
+                                                </td>
+                                                <td class="py-1.5 pr-2">
+                                                    <div class="font-mono text-[10px] text-gray-300">{{ multa.citacion }}</div>
+                                                    <div class="line-clamp-2">{{ multa.descripcion }}</div>
+                                                </td>
+                                                <td class="py-1.5 text-right font-mono font-bold text-red-300 whitespace-nowrap">
+                                                    ${{ Number(multa.total).toFixed(2) }}
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Tarjeta 2: Valores de Matrícula SRI -->
+                            <div
+                                class="rounded-lg border p-4"
+                                :class="resultadoAuditoria.sri?.tiene_deuda
+                                    ? 'border-amber-500 bg-amber-950/40'
+                                    : 'border-green-600 bg-green-950/30'"
+                            >
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <h4
+                                            class="text-xs font-extrabold uppercase tracking-wider"
+                                            :class="resultadoAuditoria.sri?.tiene_deuda ? 'text-amber-400' : 'text-green-400'"
+                                        >
+                                            {{ resultadoAuditoria.sri?.tiene_deuda
+                                                ? '⚠️ Valores Pendientes en el SRI'
+                                                : '✅ Matrícula al Día en el SRI' }}
+                                        </h4>
+                                        <p class="mt-0.5 text-[11px] text-gray-300">
+                                            Último año pagado:
+                                            <strong class="text-white">{{ resultadoAuditoria.sri?.ultimo_anio || 'S/N' }}</strong>
+                                            <span v-if="resultadoAuditoria.sri?.camv_cpn" class="ml-2 text-gray-400">
+                                                · CAMV/CPN: {{ resultadoAuditoria.sri.camv_cpn }}
+                                            </span>
+                                        </p>
+                                    </div>
+                                    <span
+                                        class="font-mono text-lg font-extrabold"
+                                        :class="resultadoAuditoria.sri?.tiene_deuda ? 'text-amber-400' : 'text-green-400'"
+                                    >
+                                        ${{ Number(resultadoAuditoria.sri?.total || 0).toFixed(2) }}
+                                    </span>
+                                </div>
+
+                                <ul
+                                    v-if="resultadoAuditoria.sri?.rubros?.length"
+                                    class="mt-3 max-h-44 space-y-1.5 overflow-y-auto border-t border-amber-800/60 pt-2 text-[11px]"
+                                >
+                                    <li
+                                        v-for="(rubro, idx) in resultadoAuditoria.sri.rubros"
+                                        :key="idx"
+                                        class="flex justify-between gap-2 text-gray-200"
+                                    >
+                                        <span>{{ rubro.concepto }} {{ rubro.periodo ? `(${rubro.periodo})` : '' }}</span>
+                                        <span class="font-mono font-bold text-amber-300">
+                                            ${{ Number(rubro.valor).toFixed(2) }}
+                                        </span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- RESUMEN DE DEUDAS TOTALES (MULTAS + SRI) -->
+                        <div class="mt-3 flex flex-col items-start justify-between gap-2 rounded-md border border-gray-700 bg-gray-900/90 px-4 py-2.5 text-xs sm:flex-row sm:items-center">
+                            <div>
+                                <span class="font-bold uppercase text-yellow-400">Total Deudas Detectadas (Multas + SRI):</span>
+                                <span
+                                    class="ml-2 font-mono text-sm font-extrabold"
+                                    :class="Number(resultadoAuditoria.total_deudas || 0) > 0 ? 'text-red-400' : 'text-green-400'"
+                                >
+                                    ${{ Number(resultadoAuditoria.total_deudas || 0).toFixed(2) }}
+                                </span>
+                            </div>
+                            <span class="text-[11px] text-gray-400">
+                                {{ Number(resultadoAuditoria.total_deudas || 0) > 0
+                                    ? 'Recomendación: Descontar o retener este valor del precio de compra.'
+                                    : 'Vehículo sin valores pendientes de matrícula ni multas ($0.00).' }}
+                            </span>
+                        </div>
+                        
+                        <!-- TARJETA DE CANTIDAD DE TRANSFERENCIAS DE DOMINIO -->
+                        <div class="mt-4">
+                            <div class="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <h4 class="text-xs font-extrabold uppercase tracking-wider text-yellow-400">
+                                            👥 Historial de Propietarios (Traspasos Registrados)
+                                        </h4>
+                                        <p class="mt-0.5 text-[11px] text-gray-300">
+                                            {{ resultadoAuditoria.propietarios?.mensaje }}
+                                        </p>
+                                    </div>
+                                    <span
+                                        class="rounded px-2.5 py-1 text-xs font-bold font-mono"
+                                        :class="(resultadoAuditoria.propietarios?.total_traspasos || 0) >= 3 ? 'bg-amber-600 text-white' : 'bg-blue-900 text-blue-200'"
+                                    >
+                                        {{ resultadoAuditoria.propietarios?.total_traspasos || 0 }} Traspaso(s)
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- TARJETA DE ANTECEDENTES JUDICIALES / FISCALÍA -->
+                        <div class="mt-4">
+                            <div
+                                class="rounded-lg border p-4"
+                                :class="resultadoAuditoria.fiscalia?.tiene_denuncias
+                                    ? 'border-red-600 bg-red-950 animate-pulse'
+                                    : 'border-green-600 bg-green-950/30'"
+                            >
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <h4
+                                            class="text-xs font-extrabold uppercase tracking-wider"
+                                            :class="resultadoAuditoria.fiscalia?.tiene_denuncias ? 'text-red-300 font-black text-sm' : 'text-green-400'"
+                                        >
+                                            {{ resultadoAuditoria.fiscalia?.tiene_denuncias
+                                                ? `🚨 ¡ALERTA CRÍTICA! Vehículo con ${resultadoAuditoria.fiscalia.cantidad} Denuncia(s) en Fiscalía`
+                                                : '✅ Sin Registros de Denuncias o Delitos (Fiscalía FGE)' }}
+                                        </h4>
+                                        <p class="mt-0.5 text-[11px] text-gray-300">
+                                            Fuente: Fiscalía General del Estado (Noticias del Delito)
+                                        </p>
+                                    </div>
+                                    <span
+                                        class="rounded px-2.5 py-1 text-xs font-bold font-mono"
+                                        :class="resultadoAuditoria.fiscalia?.tiene_denuncias ? 'bg-red-600 text-white' : 'bg-green-800 text-green-200'"
+                                    >
+                                        {{ resultadoAuditoria.fiscalia?.tiene_denuncias ? 'BLOQUEAR COMPRA' : 'LIMPIO' }}
+                                    </span>
+                                </div>
+
+                                <ul v-if="resultadoAuditoria.fiscalia?.tiene_denuncias" class="mt-3 space-y-2 border-t border-red-800 pt-2 text-xs text-red-100">
+                                    <li v-for="(denuncia, idx) in resultadoAuditoria.fiscalia.listado" :key="idx" class="rounded bg-red-900/60 p-2">
+                                        <div class="flex justify-between font-bold">
+                                            <span>Expediente / NDD: {{ denuncia.noticia_delito }}</span>
+                                            <span>{{ denuncia.fecha }}</span>
+                                        </div>
+                                        <p class="mt-1 text-[11px] text-red-200">Ubicación: {{ denuncia.localidad }}</p>
+                                        <p class="mt-0.5 text-[11px] text-white">Delito / Asunto: {{ denuncia.descripcion }}</p>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 rounded-md border border-blue-700 bg-blue-950/40 p-3 text-sm text-blue-100">
+                            <p class="font-semibold">Auditoría completada. El expediente temporal aún no está en la bandeja de revisión.</p>
+                            <p class="mt-1 text-xs text-blue-200">
+                                Completa los datos de adquisición, agrega un comentario y envíalo a revisión manual. Expediente #{{ resultadoAuditoria.validacion_id }}.
+                            </p>
+                        </div>
+
+                        <div v-if="form.validacion_id" class="mt-4 rounded-md border border-gray-600 bg-gray-900 p-4">
+                            <label for="comentario-solicitud" class="block text-xs font-semibold text-gray-200">
+                                Comentario para revisión manual (opcional)
+                            </label>
+                            <textarea
+                                id="comentario-solicitud"
+                                v-model="form.comentario_solicitud"
+                                rows="3"
+                                maxlength="2000"
+                                class="mt-1 block w-full rounded-md border-gray-600 bg-gray-800 text-sm text-white shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                                placeholder="Agrega información útil para quien revisará el expediente..."
+                            />
+                            <p v-if="form.errors.comentario_solicitud" class="mt-1 text-xs text-red-300">
+                                {{ form.errors.comentario_solicitud }}
+                            </p>
+                            <div class="mt-3 flex justify-end">
+                                <button
+                                    type="button"
+                                    @click="enviarFormulario"
+                                    :disabled="form.processing"
+                                    class="rounded bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+                                >
+                                    {{ form.processing ? 'Enviando expediente...' : 'Enviar a revisión manual' }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
                 <div
                     v-else

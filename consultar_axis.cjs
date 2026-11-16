@@ -1,7 +1,9 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 
-process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\LENOVO\\.cache\\puppeteer';
+if (process.platform === 'win32') {
+    process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\LENOVO\\.cache\\puppeteer'; //[cite: 4, 5]
+}
 
 const placa = process.argv[2];
 const archivoSalida = process.argv[3];
