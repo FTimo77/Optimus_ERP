@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\clase_vehiculo;
 use App\Models\color_vehiculo;
+use App\Models\Documentos_vehiculo;
 use App\Models\estado_vehiculo;
 use App\Models\imagen_vehiculo;
 use App\Models\marca_vehiculo;
@@ -47,6 +48,21 @@ class VehiculoIngresoController extends Controller
 
     public function store(Request $request): RedirectResponse
     {
+        $validacionIdInicial = $request->validate([
+            'validacion_id' => ['nullable', 'integer', 'exists:validacion_documentos,id'],
+        ])['validacion_id'] ?? null;
+        $validacionAuditoria = null;
+
+        if ($validacionIdInicial !== null) {
+            $validacionAuditoria = ValidacionDocumento::query()
+                ->whereKey($validacionIdInicial)
+                ->where('subido_por', $request->user()->id)
+                ->where('estado_revision', 'borrador')
+                ->firstOrFail();
+
+            $request->merge($this->camposVehiculoDesdeAxis($validacionAuditoria, $request));
+        }
+
         $plate = $request->input('id_vehiculo');
 
         if (is_string($plate)) {
@@ -89,7 +105,6 @@ class VehiculoIngresoController extends Controller
             'precio_venta' => ['nullable', 'numeric', 'min:0', 'gte:costo_adquisicion'],
         ]);
 
-        $validacionId = $validated['validacion_id'] ?? null;
         $comentarioSolicitud = trim($validated['comentario_solicitud'] ?? '');
         $documentoMatricula = $validated['documento_matricula'] ?? null;
         unset(
@@ -98,16 +113,7 @@ class VehiculoIngresoController extends Controller
             $validated['documento_matricula'],
         );
 
-        if ($validacionId !== null) {
-            return $this->enviarARevision(
-                $request,
-                (int) $validacionId,
-                $validated,
-                $comentarioSolicitud,
-            );
-        }
-
-        if ($documentoMatricula instanceof UploadedFile) {
+        if ($validacionAuditoria === null && $documentoMatricula instanceof UploadedFile) {
             return $this->enviarDocumentoSinAuditoriaARevision(
                 $request,
                 $validated,
@@ -122,7 +128,7 @@ class VehiculoIngresoController extends Controller
             ->whereIn('estado_revision', ['borrador', 'pendiente', 'rechazada'])
             ->exists();
 
-        if ($auditoriaSinAprobacion) {
+        if ($validacionAuditoria === null && $auditoriaSinAprobacion) {
             throw ValidationException::withMessages([
                 'id_vehiculo' => 'Esta matrícula ya fue auditada y requiere revisión manual antes de ingresar al inventario.',
             ]);
@@ -148,7 +154,22 @@ class VehiculoIngresoController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($validated, $imagePaths): void {
+            DB::transaction(function () use ($validated, $imagePaths, $validacionAuditoria): void {
+                if ($validacionAuditoria !== null) {
+                    $validacionBloqueada = ValidacionDocumento::query()
+                        ->whereKey($validacionAuditoria->id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+
+                    if ($validacionBloqueada->subido_por !== $validacionAuditoria->subido_por
+                        || $validacionBloqueada->estado_revision !== 'borrador'
+                        || $validacionBloqueada->placa !== $validated['id_vehiculo']) {
+                        throw ValidationException::withMessages([
+                            'validacion_id' => 'La auditoría ya no está disponible para registrar este vehículo.',
+                        ]);
+                    }
+                }
+
                 $tipoVehiculo = $validated['tipo_vehiculo'] ?? null;
                 $servicio = $validated['servicio'] ?? null;
                 unset($validated['tipo_vehiculo'], $validated['servicio']);
@@ -169,6 +190,15 @@ class VehiculoIngresoController extends Controller
                         'es_principal' => $index === 0,
                     ]);
                 }
+
+                if ($validacionAuditoria !== null) {
+                    Documentos_vehiculo::create([
+                        'id_vehiculo' => $vehiculo->id_vehiculo,
+                        'ruta_matricula' => $validacionAuditoria->ruta_documento,
+                    ]);
+
+                    $validacionBloqueada->update(['estado_revision' => 'registrada']);
+                }
             });
         } catch (Throwable $exception) {
             Storage::disk('public')->delete($imagePaths);
@@ -182,79 +212,102 @@ class VehiculoIngresoController extends Controller
     }
 
     /**
-     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
      */
-    private function enviarARevision(
-        Request $request,
-        int $validacionId,
-        array $validated,
-        string $comentarioSolicitud,
-    ): RedirectResponse {
-        $validacion = ValidacionDocumento::query()
-            ->whereKey($validacionId)
-            ->where('subido_por', $request->user()->id)
-            ->where('estado_revision', 'borrador')
-            ->firstOrFail();
+    private function camposVehiculoDesdeAxis(ValidacionDocumento $validacion, Request $request): array
+    {
+        $datosOficiales = $validacion->datos_oficiales ?? [];
+        $camposPendientes = $this->camposAxisPendientes($datosOficiales);
+        $placaAxis = strtoupper(preg_replace('/[^A-Z0-9]/', '', (string) ($datosOficiales['placa'] ?? '')) ?? '');
+        $placaExpediente = strtoupper(preg_replace('/[^A-Z0-9]/', '', $validacion->placa) ?? '');
 
-        $placaFormulario = strtoupper(preg_replace('/[^A-Z0-9]/', '', $validated['id_vehiculo']) ?? '');
-        if ($placaFormulario !== $validacion->placa) {
+        if ($placaAxis !== '' && $placaAxis !== $placaExpediente) {
             throw ValidationException::withMessages([
-                'id_vehiculo' => 'La placa del vehículo debe coincidir con la matrícula auditada.',
+                'validacion_id' => 'La placa devuelta por AxisCloud no coincide con la matrícula auditada.',
             ]);
         }
 
-        if (Vehiculo::query()->whereKey($validacion->placa)->exists()) {
+        if (in_array('id_vehiculo', $camposPendientes, true)) {
+            $placaManual = strtoupper(preg_replace('/[^A-Z0-9]/', '', (string) $request->input('id_vehiculo')) ?? '');
+
+            if ($placaManual !== '' && $placaManual !== $placaExpediente) {
+                throw ValidationException::withMessages([
+                    'id_vehiculo' => 'La placa ingresada debe coincidir con la matrícula que se auditó.',
+                ]);
+            }
+        }
+
+        if (! Storage::disk('local')->exists($validacion->ruta_documento)) {
             throw ValidationException::withMessages([
-                'id_vehiculo' => 'La placa auditada ya existe en el inventario.',
+                'validacion_id' => 'No se encontró el archivo privado de la matrícula auditada. Vuelve a subirlo.',
             ]);
         }
 
-        $imagenes = $validated['imagenes'] ?? [];
-        unset($validated['imagenes']);
-        $validated['id_vehiculo'] = $validacion->placa;
-        $rutasImagenesTemporales = [];
+        $valorAxis = fn (string $campoFormulario, string $campoAxis): mixed => in_array($campoFormulario, $camposPendientes, true)
+            ? $request->input($campoFormulario)
+            : trim((string) $datosOficiales[$campoAxis]);
 
-        foreach ($imagenes as $imagen) {
-            $rutaImagen = $imagen->store("validacion-documentos/{$validacion->id}/imagenes", 'local');
-            if (! is_string($rutaImagen)) {
-                Storage::disk('local')->delete($rutasImagenesTemporales);
+        return [
+            'id_vehiculo' => $valorAxis('id_vehiculo', 'placa'),
+            'id_marca' => in_array('id_marca', $camposPendientes, true)
+                ? $request->input('id_marca')
+                : marca_vehiculo::firstOrCreate(['nombre' => ucwords(mb_strtolower(trim($datosOficiales['marca']), 'UTF-8'))])->id_marca,
+            'id_clase' => in_array('id_clase', $camposPendientes, true)
+                ? $request->input('id_clase')
+                : clase_vehiculo::firstOrCreate(['nombre' => ucwords(mb_strtolower(trim($datosOficiales['clase']), 'UTF-8'))])->id_clase,
+            'id_pais' => in_array('id_pais', $camposPendientes, true)
+                ? $request->input('id_pais')
+                : pais::firstOrCreate(['nombre' => ucwords(mb_strtolower(trim($datosOficiales['pais']), 'UTF-8'))])->id_pais,
+            'id_color' => in_array('id_color', $camposPendientes, true)
+                ? $request->input('id_color')
+                : color_vehiculo::firstOrCreate(['nombre' => ucwords(mb_strtolower(trim($datosOficiales['color']), 'UTF-8'))])->id_color,
+            'modelo' => $valorAxis('modelo', 'modelo'),
+            'anio' => in_array('anio', $camposPendientes, true)
+                ? $request->input('anio')
+                : (int) $datosOficiales['anio'],
+            'motor' => $valorAxis('motor', 'motor'),
+            'chasis' => $valorAxis('chasis', 'chasis'),
+            'cilindraje' => $valorAxis('cilindraje', 'cilindraje'),
+            'tipo_vehiculo' => trim((string) ($datosOficiales['tipo_vehiculo'] ?? '')) ?: null,
+            'servicio' => trim((string) ($datosOficiales['servicio'] ?? '')) ?: null,
+        ];
+    }
 
-                throw new RuntimeException('No se pudo guardar una imagen del vehículo para revisión.');
+    /**
+     * @param  array<string, mixed>  $datosOficiales
+     * @return list<string>
+     */
+    private function camposAxisPendientes(array $datosOficiales): array
+    {
+        $camposFormulario = [
+            'id_vehiculo' => 'placa',
+            'id_marca' => 'marca',
+            'id_clase' => 'clase',
+            'id_pais' => 'pais',
+            'id_color' => 'color',
+            'modelo' => 'modelo',
+            'anio' => 'anio',
+            'motor' => 'motor',
+            'chasis' => 'chasis',
+            'cilindraje' => 'cilindraje',
+        ];
+        $pendientes = [];
+
+        foreach ($camposFormulario as $campoFormulario => $campoAxis) {
+            $valor = $datosOficiales[$campoAxis] ?? null;
+            $datoAusente = ! is_string($valor) || trim($valor) === '';
+
+            if ($campoFormulario === 'anio' && ! $datoAusente) {
+                $anio = filter_var($valor, FILTER_VALIDATE_INT);
+                $datoAusente = $anio === false || $anio < 1980 || $anio > (int) date('Y') + 1;
             }
 
-            $rutasImagenesTemporales[] = $rutaImagen;
+            if ($datoAusente) {
+                $pendientes[] = $campoFormulario;
+            }
         }
 
-        $datosIngreso = [...$validated, 'imagenes' => $rutasImagenesTemporales];
-
-        try {
-            DB::transaction(function () use ($request, $validacion, $datosIngreso, $comentarioSolicitud): void {
-                $validacionBloqueada = ValidacionDocumento::query()
-                    ->whereKey($validacion->getKey())
-                    ->where('subido_por', $request->user()->id)
-                    ->lockForUpdate()
-                    ->firstOrFail();
-
-                abort_unless(
-                    $validacionBloqueada->estado_revision === 'borrador',
-                    409,
-                    'Este expediente ya fue enviado a revisión.',
-                );
-
-                $validacionBloqueada->update([
-                    'datos_ingreso' => $datosIngreso,
-                    'comentario_solicitud' => $comentarioSolicitud === '' ? null : $comentarioSolicitud,
-                    'estado_revision' => 'pendiente',
-                ]);
-            });
-        } catch (Throwable $exception) {
-            Storage::disk('local')->delete($rutasImagenesTemporales);
-
-            throw $exception;
-        }
-
-        return to_route('validacion-documentos.show', $validacion)
-            ->with('success', 'Expediente enviado a revisión manual.');
+        return $pendientes;
     }
 
     /**
@@ -646,6 +699,7 @@ class VehiculoIngresoController extends Controller
         $codigoSalidaAuditoria = $this->ejecutarAuditoriaCompleta($placa, $archivoTemp);
 
         $datosOficiales = [];
+        $axisDisponible = false;
         $motivoFalloAxis = null;
         $resumenMultas = [
             'ok' => false,
@@ -733,7 +787,7 @@ class VehiculoIngresoController extends Controller
                     'listado' => $listadoMultas,
                 ];
 
-                // D. Ficha Técnica de AxisCloud (con respaldo del SRI si AxisCloud falla)
+                // D. Ficha Técnica de AxisCloud
                 $respuestaExterna = is_array($paquete['axis'] ?? null) ? $paquete['axis'] : $paquete;
 
                 if (isset($respuestaExterna['error_script'])) {
@@ -745,6 +799,7 @@ class VehiculoIngresoController extends Controller
                     : (! empty($respuestaExterna['lsDatosIdentificacion']) ? $respuestaExterna : null);
 
                 if (is_array($rawAxis) && ! empty($rawAxis['lsDatosIdentificacion'])) {
+                    $axisDisponible = true;
                     $extraerValor = function (array $lista, string $etiquetaBuscada) {
                         foreach ($lista as $item) {
                             if (! is_array($item)) {
@@ -765,17 +820,18 @@ class VehiculoIngresoController extends Controller
                     $revisionInfo = is_array($rawAxis['lsRevision'] ?? null) ? $rawAxis['lsRevision'] : [];
 
                     $datosOficiales = [
-                        'placa' => $placa,
+                        'placa' => $extraerValor($identificacion, 'Placa'),
                         'propietario' => $nombrePropietarioWeb,
-                        'chasis' => $extraerValor($identificacion, 'VIN'),
+                        'chasis' => $extraerValor($identificacion, 'VIN') ?: $extraerValor($identificacion, 'Chasis'),
                         'motor' => $extraerValor($identificacion, 'Motor'),
-                        'marca' => $extraerValor($modeloInfo, 'Marca') ?: (string) ($vehiculoSRI['descripcionMarca'] ?? ''),
-                        'modelo' => $extraerValor($modeloInfo, 'Modelo') ?: (string) ($vehiculoSRI['descripcionModelo'] ?? ''),
-                        'anio' => $extraerValor($modeloInfo, 'Fabricaci') ?: (string) ($vehiculoSRI['anioAuto'] ?? ''),
-                        'pais' => $extraerValor($modeloInfo, 'Pa') ?: (string) ($vehiculoSRI['descripcionPais'] ?? ''),
+                        'marca' => $extraerValor($modeloInfo, 'Marca'),
+                        'modelo' => $extraerValor($modeloInfo, 'Modelo'),
+                        'anio' => $extraerValor($modeloInfo, 'Fabricaci'),
+                        'pais' => $extraerValor($modeloInfo, 'País') ?: $extraerValor($modeloInfo, 'Pais'),
                         'color' => $extraerValor($otrasInfo, 'Color 1'),
-                        'clase' => $extraerValor($otrasInfo, 'Clase') ?: $extraerValor($otrasInfo, 'Tipo'),
+                        'clase' => $extraerValor($otrasInfo, 'Clase'),
                         'tipo_vehiculo' => $extraerValor($otrasInfo, 'Tipo'),
+                        'cilindraje' => $extraerValor($otrasInfo, 'Cilindraje'),
                         'servicio' => trim((string) ($rawAxis['lsServicio'] ?? '')),
                         'fecha_matricula_desde' => $extraerValor($revisionInfo, 'Matrícula Desde'),
                         'fecha_matricula_hasta' => $extraerValor($revisionInfo, 'Matrícula Hasta'),
@@ -788,17 +844,19 @@ class VehiculoIngresoController extends Controller
                     ];
                 } else {
                     $datosOficiales = [
-                        'placa' => $placa,
+                        'placa' => '',
                         'propietario' => $nombrePropietarioWeb,
                         'chasis' => '',
                         'motor' => '',
-                        'marca' => (string) ($vehiculoSRI['descripcionMarca'] ?? ''),
-                        'modelo' => (string) ($vehiculoSRI['descripcionModelo'] ?? ''),
-                        'anio' => (string) ($vehiculoSRI['anioAuto'] ?? ''),
-                        'pais' => (string) ($vehiculoSRI['descripcionPais'] ?? ''),
+                        'marca' => '',
+                        'modelo' => '',
+                        'anio' => '',
+                        'pais' => '',
                         'color' => '',
-                        'clase' => (string) ($vehiculoSRI['nombreClase'] ?? ''),
-                        'servicio' => (string) ($vehiculoSRI['descripcionServicio'] ?? ''),
+                        'clase' => '',
+                        'tipo_vehiculo' => '',
+                        'cilindraje' => '',
+                        'servicio' => '',
                         'ultimo_anio_pagado_sri' => $resumenSRI['ultimo_anio'],
                         'total_multas' => $resumenMultas['total'],
                         'total_sri' => $resumenSRI['total'],
@@ -815,6 +873,32 @@ class VehiculoIngresoController extends Controller
             $motivoFalloAxis = 'Sin respuesta del robot';
             Log::warning('Vehicle full audit lookup did not produce an output file.', [
                 'exit_code' => $codigoSalidaAuditoria,
+            ]);
+        }
+
+        $camposAxisPendientes = $this->camposAxisPendientes($datosOficiales);
+        $placaAxisNormalizada = strtoupper(preg_replace('/[^A-Z0-9]/', '', (string) ($datosOficiales['placa'] ?? '')) ?? '');
+        $placaAxisNoCoincide = $placaAxisNormalizada !== '' && $placaAxisNormalizada !== $placa;
+
+        if (! $axisDisponible || $placaAxisNoCoincide) {
+            Log::warning('AxisCloud could not complete the official vehicle audit.', [
+                'missing_fields' => $camposAxisPendientes,
+                'axis_available' => $axisDisponible,
+                'plate_mismatch' => $placaAxisNoCoincide,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => $placaAxisNoCoincide
+                    ? 'La placa devuelta por AxisCloud no coincide con la matrícula auditada.'
+                    : 'AxisCloud no pudo completar la auditoría. Verifica los datos en el formulario manual.',
+                'manual_review_available' => true,
+            ], 422);
+        }
+
+        if ($camposAxisPendientes !== []) {
+            Log::info('AxisCloud audit completed with fields to be completed manually.', [
+                'missing_fields' => $camposAxisPendientes,
             ]);
         }
 
@@ -1071,6 +1155,7 @@ class VehiculoIngresoController extends Controller
             'total_deudas' => round($resumenMultas['total'] + $resumenSRI['total'], 2),
             'datos_oficiales' => $datosOficiales,
             'datos_documento' => $datosMatricula,
+            'campos_axis_pendientes' => $camposAxisPendientes,
             'resumen_auditoria' => $validacion->resumen_auditoria,
         ]);
     }

@@ -23,12 +23,14 @@ const estadoTexto = (estado) => ({
     pendiente: 'Pendiente de revisión',
     aprobada: 'Aprobada',
     rechazada: 'Rechazada',
+    registrada: 'Registrada en inventario',
 }[estado] || estado);
 
 const estadoClases = (estado) => ({
     pendiente: 'bg-amber-100 text-amber-900',
     aprobada: 'bg-green-100 text-green-900',
     rechazada: 'bg-red-100 text-red-900',
+    registrada: 'bg-blue-100 text-blue-900',
 }[estado] || 'bg-gray-100 text-gray-800');
 
 const fechaTexto = (fecha) => fecha
@@ -452,6 +454,9 @@ const reenviar = () => {
                         >
                             Enviar nuevamente a revisión
                         </button>
+                    </div>
+                    <div v-else-if="validacion.estado_revision === 'registrada'" class="mt-3 space-y-2 text-sm text-blue-800">
+                        El vehículo fue registrado directamente en el inventario usando los datos oficiales de AxisCloud.
                     </div>
                     <div v-else class="mt-3 space-y-2 text-sm text-gray-700">
                         <p>

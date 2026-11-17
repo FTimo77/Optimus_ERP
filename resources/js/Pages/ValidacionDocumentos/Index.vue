@@ -17,12 +17,14 @@ const estadoTexto = (estado) => ({
     pendiente: 'Pendiente',
     aprobada: 'Aprobada',
     rechazada: 'Rechazada',
+    registrada: 'Registrada en inventario',
 }[estado] || estado);
 
 const estadoClases = (estado) => ({
     pendiente: 'bg-amber-100 text-amber-800',
     aprobada: 'bg-green-100 text-green-800',
     rechazada: 'bg-red-100 text-red-800',
+    registrada: 'bg-blue-100 text-blue-800',
 }[estado] || 'bg-gray-100 text-gray-800');
 
 const fechaTexto = (fecha) => fecha

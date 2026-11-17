@@ -143,8 +143,23 @@ class VehiculoIngresoControllerTest extends TestCase
             'codError' => '0',
             'campos' => json_encode([
                 'lsDatosIdentificacion' => [
+                    ['etiqueta' => 'Placa:', 'valor' => 'PBA1234'],
                     ['etiqueta' => 'VIN:', 'valor' => 'VIN12345678901234'],
+                    ['etiqueta' => 'Motor:', 'valor' => 'MOTOR-AXIS-001'],
                 ],
+                'lsDatosModelo' => [
+                    ['etiqueta' => 'Marca:', 'valor' => 'Toyota'],
+                    ['etiqueta' => 'Modelo:', 'valor' => 'Corolla'],
+                    ['etiqueta' => 'Año de Fabricación:', 'valor' => '2024'],
+                    ['etiqueta' => 'País:', 'valor' => 'Japón'],
+                ],
+                'lsOtrasCaracteristicas' => [
+                    ['etiqueta' => 'Color 1:', 'valor' => 'Blanco'],
+                    ['etiqueta' => 'Clase:', 'valor' => 'Sedan'],
+                    ['etiqueta' => 'Tipo:', 'valor' => 'Sedan'],
+                    ['etiqueta' => 'Cilindraje:', 'valor' => '1800 cc'],
+                ],
+                'lsServicio' => 'Particular',
                 'lsRevision' => [
                     ['etiqueta' => 'Matrícula Desde:', 'valor' => '16-06-2026 09:38:04'],
                     ['etiqueta' => 'Matrícula Hasta:', 'valor' => '31-03-2029 00:00:00'],
@@ -164,6 +179,9 @@ class VehiculoIngresoControllerTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('estado_revision', 'borrador')
+            ->assertJsonPath('datos_oficiales.placa', 'PBA1234')
+            ->assertJsonPath('datos_oficiales.marca', 'Toyota')
+            ->assertJsonPath('datos_oficiales.cilindraje', '1800 cc')
             ->assertJsonPath('datos_oficiales.fecha_matricula_desde', '16-06-2026 09:38:04')
             ->assertJsonPath('datos_oficiales.fecha_matricula_hasta', '31-03-2029 00:00:00')
             ->assertJsonPath('datos_oficiales.fecha_ultima_revision_desde', '20-03-2025 13:52:09')
@@ -205,18 +223,79 @@ class VehiculoIngresoControllerTest extends TestCase
         });
     }
 
-    public function test_audited_vehicle_stays_out_of_inventory_until_manually_approved(): void
+    public function test_partial_axiscloud_data_finishes_audit_and_returns_fields_to_complete(): void
+    {
+        Storage::fake('local');
+        Http::preventStrayRequests();
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::response([
+                'candidates' => [[
+                    'content' => [
+                        'parts' => [[
+                            'text' => json_encode(['placa' => 'PBA1234'], JSON_THROW_ON_ERROR),
+                        ]],
+                    ],
+                ]],
+            ]),
+        ]);
+        config([
+            'services.gemini.api_key' => 'test-gemini-api-key',
+            'services.gemini.model' => 'gemini-3.5-flash-lite',
+        ]);
+        FakeAxisVehiculoIngresoController::$respuestaAxis = [
+            'codError' => '0',
+            'campos' => json_encode([
+                'lsDatosIdentificacion' => [
+                    ['etiqueta' => 'Placa:', 'valor' => 'PBA1234'],
+                    ['etiqueta' => 'VIN:', 'valor' => 'VIN12345678901234'],
+                    ['etiqueta' => 'Motor:', 'valor' => 'MOTOR-AXIS-001'],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        ];
+        $this->app->bind(VehiculoIngresoController::class, FakeAxisVehiculoIngresoController::class);
+
+        $response = $this->actingAs(User::factory()->create())
+            ->post(route('vehiculos.escanear.matricula'), [
+                'documento' => UploadedFile::fake()->image('matricula.jpg'),
+            ], ['Accept' => 'application/json']);
+
+        $response->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('estado_revision', 'borrador')
+            ->assertJsonPath('campos_axis_pendientes.0', 'id_marca')
+            ->assertJsonPath('campos_axis_pendientes.6', 'cilindraje');
+        $validacion = ValidacionDocumento::findOrFail($response->json('validacion_id'));
+        $this->assertSame('', $validacion->datos_oficiales['cilindraje']);
+        Storage::disk('local')->assertExists($validacion->ruta_documento);
+    }
+
+    public function test_successful_axiscloud_audit_registers_vehicle_using_only_official_vehicle_data(): void
     {
         Storage::fake('local');
         Storage::fake('public');
         $catalogIds = $this->createCatalogs();
         $user = User::factory()->create();
+        $rutaMatricula = 'validacion-documentos/documento.jpg';
+        Storage::disk('local')->put($rutaMatricula, 'matricula');
         $validacion = ValidacionDocumento::create([
             'placa' => 'PBA1234',
-            'ruta_documento' => 'validacion-documentos/documento.jpg',
+            'ruta_documento' => $rutaMatricula,
             'mime_type' => 'image/jpeg',
             'datos_documento' => ['placa' => 'PBA1234'],
-            'datos_oficiales' => ['placa' => 'PBA1234'],
+            'datos_oficiales' => [
+                'placa' => 'PBA1234',
+                'marca' => 'Hyundai',
+                'clase' => 'SUV',
+                'pais' => 'Corea del Sur',
+                'color' => 'Azul',
+                'modelo' => 'Kona',
+                'anio' => '2023',
+                'motor' => 'MOTOR-AXIS-001',
+                'chasis' => 'CHASIS-AXIS-001',
+                'cilindraje' => '1600 cc',
+                'tipo_vehiculo' => 'SUV',
+                'servicio' => 'Particular',
+            ],
             'comparacion' => [],
             'alertas_criticas' => 0,
             'estado_revision' => 'borrador',
@@ -225,56 +304,143 @@ class VehiculoIngresoControllerTest extends TestCase
 
         $response = $this->actingAs($user)->post(route('vehiculos.store'), [
             ...$catalogIds,
-            'id_vehiculo' => 'PBA-1234',
-            'modelo' => 'Corolla',
+            'id_vehiculo' => 'FAKE9999',
+            'id_marca' => $catalogIds['id_marca'],
+            'id_clase' => $catalogIds['id_clase'],
+            'id_pais' => $catalogIds['id_pais'],
+            'id_color' => $catalogIds['id_color'],
+            'modelo' => 'Datos manipulados',
             'anio' => 2024,
-            'motor' => 'MOTOR-REVIEW-001',
-            'chasis' => 'CHASIS-REVIEW-001',
+            'motor' => 'MOTOR-FALSO-001',
+            'chasis' => 'CHASIS-FALSO-001',
             'cilindraje' => '1800 cc',
             'costo_adquisicion' => 18000,
             'validacion_id' => $validacion->id,
-            'comentario_solicitud' => 'Favor revisar los datos de compra.',
             'imagenes' => [UploadedFile::fake()->image('vehiculo.jpg')],
         ]);
 
-        $response->assertRedirect(route('validacion-documentos.show', $validacion));
-        $validacionActualizada = $validacion->fresh();
-        $datosIngreso = $validacionActualizada->datos_ingreso;
-
-        $this->assertSame('pendiente', $validacionActualizada->estado_revision);
-        $this->assertSame('Favor revisar los datos de compra.', $validacionActualizada->comentario_solicitud);
-        $this->assertSame('PBA1234', $datosIngreso['id_vehiculo']);
-        $this->assertCount(1, $datosIngreso['imagenes']);
+        $response->assertRedirect(route('vehiculos.create'));
         $this->assertDatabaseMissing('vehiculos', [
-            'id_vehiculo' => 'PBA1234',
+            'id_vehiculo' => 'FAKE9999',
         ]);
-        Storage::disk('local')->assertExists($datosIngreso['imagenes'][0]);
-
-        $this->actingAs(User::factory()->create())
-            ->patch(route('validacion-documentos.decidir', $validacion), [
-                'decision' => 'aprobada',
-            ])
-            ->assertRedirect(route('validacion-documentos.show', $validacion));
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'id_marca' => DB::table('marca_vehiculos')->where('nombre', 'Hyundai')->value('id_marca'),
+            'id_clase' => DB::table('clase_vehiculos')->where('nombre', 'Suv')->value('id_clase'),
+            'id_pais' => DB::table('paises')->where('nombre', 'Corea Del Sur')->value('id_pais'),
+            'id_color' => DB::table('color_vehiculos')->where('nombre', 'Azul')->value('id_color'),
+            'id_tipo_vehiculo' => DB::table('tipo_vehiculos')->where('nombre', 'SUV')->value('id_tipo_vehiculo'),
+            'id_servicio' => DB::table('servicios')->where('nombre', 'PARTICULAR')->value('id_servicio'),
+            'id_tipo_combustible' => $catalogIds['id_tipo_combustible'],
+            'modelo' => 'Kona',
+            'anio' => 2023,
+            'motor' => 'MOTOR-AXIS-001',
+            'chasis' => 'CHASIS-AXIS-001',
+            'cilindraje' => '1600 cc',
+            'costo_adquisicion' => 18000,
+        ]);
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'registrada',
+        ]);
+        $this->assertDatabaseHas('documentos_vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'ruta_matricula' => $rutaMatricula,
+        ]);
 
         $imagenPublica = DB::table('imagen_vehiculos')
             ->where('id_vehiculo', 'PBA1234')
             ->value('ruta_imagen');
-
-        $this->assertDatabaseHas('validacion_documentos', [
-            'id' => $validacion->id,
-            'estado_revision' => 'aprobada',
-        ]);
-        $this->assertDatabaseHas('vehiculos', [
-            'id_vehiculo' => 'PBA1234',
-            'costo_adquisicion' => 18000,
-        ]);
         $this->assertDatabaseHas('imagen_vehiculos', [
             'id_vehiculo' => 'PBA1234',
             'ruta_imagen' => $imagenPublica,
             'es_principal' => true,
         ]);
-        Storage::disk('local')->assertMissing($datosIngreso['imagenes'][0]);
         Storage::disk('public')->assertExists($imagenPublica);
+    }
+
+    public function test_missing_axiscloud_cilindraje_can_be_filled_without_overriding_other_official_data(): void
+    {
+        Storage::fake('local');
+        Storage::fake('public');
+        $catalogIds = $this->createCatalogs();
+        $user = User::factory()->create();
+        $rutaMatricula = 'validacion-documentos/documento-incompleto.jpg';
+        Storage::disk('local')->put($rutaMatricula, 'matricula');
+        $validacion = ValidacionDocumento::create([
+            'placa' => 'PBA1234',
+            'ruta_documento' => $rutaMatricula,
+            'mime_type' => 'image/jpeg',
+            'datos_documento' => ['placa' => 'PBA1234'],
+            'datos_oficiales' => [
+                'placa' => 'PBA1234',
+                'marca' => 'Hyundai',
+                'clase' => 'SUV',
+                'pais' => 'Corea del Sur',
+                'color' => 'Azul',
+                'modelo' => 'Kona',
+                'anio' => '2023',
+                'motor' => 'MOTOR-AXIS-CYL-001',
+                'chasis' => 'CHASIS-AXIS-CYL-001',
+                'cilindraje' => '',
+                'tipo_vehiculo' => 'SUV',
+                'servicio' => 'Particular',
+            ],
+            'comparacion' => [],
+            'alertas_criticas' => 0,
+            'estado_revision' => 'borrador',
+            'subido_por' => $user->id,
+        ]);
+
+        $datosRegistro = [
+            ...$catalogIds,
+            'validacion_id' => $validacion->id,
+            'id_vehiculo' => 'PBA1234',
+            'modelo' => 'Valor manipulado',
+            'anio' => 2024,
+            'motor' => 'MOTOR-MANIPULADO',
+            'chasis' => 'CHASIS-MANIPULADO',
+            'costo_adquisicion' => 18000,
+        ];
+
+        $this->actingAs($user)
+            ->from(route('vehiculos.create'))
+            ->post(route('vehiculos.store'), $datosRegistro)
+            ->assertSessionHasErrors('cilindraje');
+
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'borrador',
+        ]);
+
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
+
+        $response = $this->actingAs($user)->post(route('vehiculos.store'), [
+            ...$datosRegistro,
+            'cilindraje' => '1600 cc',
+        ]);
+
+        $response->assertRedirect(route('vehiculos.create'));
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'id_marca' => DB::table('marca_vehiculos')->where('nombre', 'Hyundai')->value('id_marca'),
+            'id_clase' => DB::table('clase_vehiculos')->where('nombre', 'Suv')->value('id_clase'),
+            'id_pais' => DB::table('paises')->where('nombre', 'Corea Del Sur')->value('id_pais'),
+            'id_color' => DB::table('color_vehiculos')->where('nombre', 'Azul')->value('id_color'),
+            'id_tipo_vehiculo' => DB::table('tipo_vehiculos')->where('nombre', 'SUV')->value('id_tipo_vehiculo'),
+            'id_servicio' => DB::table('servicios')->where('nombre', 'PARTICULAR')->value('id_servicio'),
+            'modelo' => 'Kona',
+            'anio' => 2023,
+            'motor' => 'MOTOR-AXIS-CYL-001',
+            'chasis' => 'CHASIS-AXIS-CYL-001',
+            'cilindraje' => '1600 cc',
+        ]);
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'registrada',
+        ]);
     }
 
     public function test_a_failed_ocr_document_can_be_sent_to_manual_review_and_approved(): void
