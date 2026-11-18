@@ -59,6 +59,18 @@ const erroresImagenes = computed(() =>
         .map(([, error]) => error),
 );
 
+const fuentesMultasDirectas = computed(() => {
+    if (!resultadoAuditoria.value) {
+        return [];
+    }
+
+    return [
+        { key: 'amt', titulo: 'AMT (Quito)', data: resultadoAuditoria.value.amt },
+        { key: 'cte', titulo: 'CTE (Comisión de Tránsito)', data: resultadoAuditoria.value.cte },
+        { key: 'atm', titulo: 'ATM (Guayaquil)', data: resultadoAuditoria.value.atm },
+    ];
+});
+
 // 5. Función que consulta la placa en segundo plano
 const buscarPorPlaca = async () => {
     if (!form.id_vehiculo.trim()) {
@@ -999,6 +1011,93 @@ const escanearYComparar = async () => {
                             </div>
                         </div>
 
+                        <!-- COMPARACIÓN DE MULTAS POR ENTIDAD DIRECTA (AMT · CTE · ATM) -->
+                        <div class="mt-4">
+                            <p class="mb-2 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                                Comparación directa por entidad (AMT · CTE · ATM)
+                            </p>
+                            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                <div
+                                    v-for="fuente in fuentesMultasDirectas"
+                                    :key="fuente.key"
+                                    class="rounded-lg border p-4"
+                                    :class="!fuente.data?.ok
+                                        ? 'border-amber-500 bg-amber-950/40'
+                                        : fuente.data?.tiene_multas
+                                            ? 'border-red-500 bg-red-950/50'
+                                            : 'border-green-600 bg-green-950/40'"
+                                >
+                                    <div class="flex items-start justify-between gap-2">
+                                        <div>
+                                            <h5
+                                                class="text-xs font-extrabold uppercase tracking-wider"
+                                                :class="!fuente.data?.ok
+                                                    ? 'text-amber-400'
+                                                    : fuente.data?.tiene_multas
+                                                        ? 'text-red-400'
+                                                        : 'text-green-400'"
+                                            >
+                                                {{ !fuente.data?.ok
+                                                    ? `⚠️ ${fuente.titulo} no disponible`
+                                                    : fuente.data?.tiene_multas
+                                                        ? `🚨 ${fuente.data.cantidad} Multa(s) (${fuente.titulo})`
+                                                        : `✅ Sin Multas (${fuente.titulo})` }}
+                                            </h5>
+                                            <p class="mt-0.5 text-[11px] text-gray-300">
+                                                {{ !fuente.data?.ok
+                                                    ? (fuente.data?.error || fuente.data?.mensaje || 'No se pudo consultar esta entidad.')
+                                                    : (fuente.data?.mensaje || `Fuente directa: ${fuente.titulo}`) }}
+                                            </p>
+                                            <p
+                                                v-if="fuente.key === 'cte' && fuente.data?.ok && (fuente.data?.historico_pagadas > 0 || fuente.data?.historico_anuladas > 0)"
+                                                class="mt-1 text-[10px] text-gray-400"
+                                            >
+                                                Histórico CTE: {{ fuente.data.historico_pagadas }} pagada(s) · {{ fuente.data.historico_anuladas }} anulada(s)
+                                            </p>
+                                            <p
+                                                v-if="fuente.key === 'amt' && fuente.data?.ok && fuente.data?.propietario_detectado"
+                                                class="mt-1 text-[10px] text-gray-400"
+                                            >
+                                                Titular AMT: {{ fuente.data.propietario_detectado }}
+                                            </p>
+                                        </div>
+
+                                        <span
+                                            v-if="!fuente.data?.ok"
+                                            class="shrink-0 rounded bg-amber-900/70 px-2.5 py-1 text-xs font-bold uppercase text-amber-300"
+                                        >
+                                            No disponible
+                                        </span>
+                                        <span
+                                            v-else
+                                            class="shrink-0 font-mono text-lg font-extrabold"
+                                            :class="fuente.data?.tiene_multas ? 'text-red-400' : 'text-green-400'"
+                                        >
+                                            ${{ Number(fuente.data?.total || 0).toFixed(2) }}
+                                        </span>
+                                    </div>
+
+                                    <ul
+                                        v-if="fuente.data?.ok && fuente.data?.tiene_multas && fuente.data?.listado?.length"
+                                        class="mt-3 max-h-40 space-y-1.5 overflow-y-auto border-t border-red-800/60 pt-2 text-[11px]"
+                                    >
+                                        <li
+                                            v-for="(m, idx) in fuente.data.listado"
+                                            :key="idx"
+                                            class="flex justify-between gap-2 text-gray-200"
+                                        >
+                                            <span class="truncate">
+                                                {{ m.fecha ? `${m.fecha} · ` : '' }}{{ m.citacion ? `[${m.citacion}] ` : '' }}{{ m.descripcion }}
+                                            </span>
+                                            <span class="whitespace-nowrap font-bold text-red-300">
+                                                ${{ Number(m.total || 0).toFixed(2) }}
+                                            </span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- RESUMEN DE DEUDAS TOTALES (MULTAS + SRI) -->
                         <div class="mt-3 flex flex-col items-start justify-between gap-2 rounded-md border border-gray-700 bg-gray-900/90 px-4 py-2.5 text-xs sm:flex-row sm:items-center">
                             <div>
@@ -1113,6 +1212,141 @@ const escanearYComparar = async () => {
                                     </p>
                                     <p class="mt-0.5 text-[11px] text-red-200">Ubicación: {{ denuncia.localidad }}</p>
                                     <p class="mt-0.5 text-[11px] font-semibold text-white">Delito: {{ denuncia.descripcion }}</p>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <!-- 3. Pensiones Alimenticias (SUPA - Alerta solo si hay 3 o más pagos pendientes) -->
+                        <div
+                            v-if="resultadoAuditoria.supa"
+                            class="mt-4 rounded-lg border p-4"
+                            :class="!resultadoAuditoria.supa?.consultado || resultadoAuditoria.supa?.ok === false
+                                ? 'border-amber-500 bg-amber-950/40'
+                                : resultadoAuditoria.supa?.tiene_alerta
+                                    ? 'border-red-600 bg-red-950 animate-pulse'
+                                    : 'border-green-600 bg-green-950/30'"
+                        >
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <h4
+                                        class="text-xs font-extrabold uppercase tracking-wider"
+                                        :class="!resultadoAuditoria.supa?.consultado || resultadoAuditoria.supa?.ok === false
+                                            ? 'text-amber-400'
+                                            : resultadoAuditoria.supa?.tiene_alerta
+                                                ? 'text-red-300 font-black'
+                                                : 'text-green-400'"
+                                    >
+                                        {{ !resultadoAuditoria.supa?.consultado
+                                            ? '⚠️ SUPA no consultado (cédula no disponible)'
+                                            : resultadoAuditoria.supa?.ok === false
+                                                ? '⚠️ SUPA no pudo verificar la cédula'
+                                                : resultadoAuditoria.supa?.tiene_alerta
+                                                    ? `🚨 ¡ALERTA SUPA! ${resultadoAuditoria.supa.pagos_pendientes} pago(s) pendiente(s) de pensión alimenticia`
+                                                    : '✅ Pensiones Alimenticias al Día (SUPA)' }}
+                                    </h4>
+                                    <p class="mt-0.5 text-[11px] text-gray-300">
+                                        Cédula: <span class="font-mono font-bold text-white">{{ resultadoAuditoria.supa?.cedula || 'No disponible' }}</span>
+                                        <span class="ml-2 text-gray-400">· {{ resultadoAuditoria.supa?.mensaje }}</span>
+                                    </p>
+                                </div>
+                                <span
+                                    class="shrink-0 rounded px-2.5 py-1 text-xs font-bold font-mono"
+                                    :class="!resultadoAuditoria.supa?.consultado || resultadoAuditoria.supa?.ok === false
+                                        ? 'bg-amber-900/70 text-amber-300'
+                                        : resultadoAuditoria.supa?.tiene_alerta
+                                            ? 'bg-red-600 text-white'
+                                            : 'bg-green-800 text-green-200'"
+                                >
+                                    {{ !resultadoAuditoria.supa?.consultado || resultadoAuditoria.supa?.ok === false
+                                        ? 'NO VERIFICADA'
+                                        : resultadoAuditoria.supa?.tiene_alerta
+                                            ? `${resultadoAuditoria.supa.pagos_pendientes} PENDIENTES ($${Number(resultadoAuditoria.supa?.saldo_pendiente || 0).toFixed(2)})`
+                                            : 'SIN ALERTAS' }}
+                                </span>
+                            </div>
+
+                            <ul
+                                v-if="resultadoAuditoria.supa?.tiene_alerta && resultadoAuditoria.supa?.listado?.length"
+                                class="mt-3 max-h-44 space-y-2 overflow-y-auto border-t border-red-800 pt-2 text-xs text-red-100"
+                            >
+                                <li
+                                    v-for="(tarjeta, idx) in resultadoAuditoria.supa.listado.filter(t => t.pagos_pendientes > 0)"
+                                    :key="idx"
+                                    class="rounded bg-red-900/60 p-2"
+                                >
+                                    <div class="flex justify-between font-bold">
+                                        <span>Tarjeta {{ tarjeta.codigo_tarjeta }} · Juicio {{ tarjeta.proceso_judicial }}</span>
+                                        <span>{{ tarjeta.pagos_pendientes }} pendiente(s) · ${{ Number(tarjeta.saldo_pendiente || 0).toFixed(2) }}</span>
+                                    </div>
+                                    <p class="mt-0.5 text-[11px] text-red-200">{{ tarjeta.dependencia }}</p>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <!-- 4. Causas Judiciales (SATJE - Función Judicial por Cédula) -->
+                        <div
+                            v-if="resultadoAuditoria.satje"
+                            class="mt-4 rounded-lg border p-4"
+                            :class="!resultadoAuditoria.satje?.consultado || resultadoAuditoria.satje?.ok === false
+                                ? 'border-amber-500 bg-amber-950/40'
+                                : resultadoAuditoria.satje?.tiene_causas
+                                    ? 'border-red-600 bg-red-950/70'
+                                    : 'border-green-600 bg-green-950/30'"
+                        >
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <h4
+                                        class="text-xs font-extrabold uppercase tracking-wider"
+                                        :class="!resultadoAuditoria.satje?.consultado || resultadoAuditoria.satje?.ok === false
+                                            ? 'text-amber-400'
+                                            : resultadoAuditoria.satje?.tiene_causas
+                                                ? 'text-red-300 font-black'
+                                                : 'text-green-400'"
+                                    >
+                                        {{ !resultadoAuditoria.satje?.consultado
+                                            ? '⚠️ SATJE no consultado (cédula no disponible)'
+                                            : resultadoAuditoria.satje?.ok === false
+                                                ? '⚠️ SATJE no pudo verificar la cédula'
+                                                : resultadoAuditoria.satje?.tiene_causas
+                                                    ? `🚨 Función Judicial: ${resultadoAuditoria.satje.cantidad_demandado} Causa(s) como Demandado`
+                                                    : '✅ Sin Causas como Demandado (SATJE)' }}
+                                    </h4>
+                                    <p class="mt-0.5 text-[11px] text-gray-300">
+                                        Cédula: <span class="font-mono font-bold text-white">{{ resultadoAuditoria.satje?.cedula || 'No disponible' }}</span>
+                                        <span class="ml-2 text-gray-400">· {{ resultadoAuditoria.satje?.mensaje }}</span>
+                                    </p>
+                                </div>
+                                <span
+                                    class="shrink-0 rounded px-2.5 py-1 text-xs font-bold font-mono"
+                                    :class="!resultadoAuditoria.satje?.consultado || resultadoAuditoria.satje?.ok === false
+                                        ? 'bg-amber-900/70 text-amber-300'
+                                        : resultadoAuditoria.satje?.tiene_causas
+                                            ? 'bg-red-600 text-white'
+                                            : 'bg-green-800 text-green-200'"
+                                >
+                                    {{ !resultadoAuditoria.satje?.consultado || resultadoAuditoria.satje?.ok === false
+                                        ? 'NO VERIFICADA'
+                                        : resultadoAuditoria.satje?.tiene_causas
+                                            ? `${resultadoAuditoria.satje.cantidad_demandado} DEMANDADO`
+                                            : 'LIMPIO' }}
+                                </span>
+                            </div>
+
+                            <ul
+                                v-if="resultadoAuditoria.satje?.ok && resultadoAuditoria.satje?.listado?.length"
+                                class="mt-3 max-h-44 space-y-2 overflow-y-auto border-t border-gray-700 pt-2 text-xs text-gray-100"
+                            >
+                                <li
+                                    v-for="(causa, idx) in resultadoAuditoria.satje.listado"
+                                    :key="idx"
+                                    class="rounded p-2"
+                                    :class="causa.rol === 'DEMANDADO' ? 'bg-red-900/60' : 'bg-gray-900/70'"
+                                >
+                                    <div class="flex justify-between font-bold">
+                                        <span>Juicio {{ causa.id_juicio }} ({{ causa.rol }})</span>
+                                        <span>{{ causa.fecha_ingreso ? causa.fecha_ingreso.slice(0, 10) : '' }}</span>
+                                    </div>
+                                    <p class="mt-0.5 text-[11px] font-semibold text-white">{{ causa.delito_accion }}</p>
                                 </li>
                             </ul>
                         </div>
