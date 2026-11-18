@@ -50,6 +50,20 @@ class VehiculoIngresoControllerTest extends TestCase
         );
     }
 
+    public function test_scan_rejects_manual_cedula_with_invalid_length(): void
+    {
+        Http::preventStrayRequests();
+
+        $response = $this->actingAs(User::factory()->create())
+            ->post(route('vehiculos.escanear.matricula'), [
+                'documento' => UploadedFile::fake()->image('matricula.jpg'),
+                'cedula_propietario' => '123',
+            ], ['Accept' => 'application/json']);
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors(['cedula_propietario']);
+    }
+
     public function test_scan_returns_503_when_gemini_api_key_is_missing(): void
     {
         Http::preventStrayRequests();
@@ -130,7 +144,6 @@ class VehiculoIngresoControllerTest extends TestCase
                             'parts' => [
                                 ['text' => json_encode([
                                     'placa' => 'PBA1234',
-                                    'cedula_propietario' => '0123456789',
                                     'fecha_emision' => '16-JUN-2026',
                                     'fecha_caduca' => '31/03/2029',
                                 ], JSON_THROW_ON_ERROR)],
@@ -201,6 +214,7 @@ class VehiculoIngresoControllerTest extends TestCase
         $response = $this->actingAs($user)
             ->post(route('vehiculos.escanear.matricula'), [
                 'documento' => UploadedFile::fake()->image('matricula.jpg'),
+                'cedula_propietario' => '0123456789',
             ], ['Accept' => 'application/json']);
 
         $response->assertOk()
@@ -218,6 +232,7 @@ class VehiculoIngresoControllerTest extends TestCase
             ->assertJsonPath('resumen_auditoria.multas.total', 0)
             ->assertJsonPath('resumen_auditoria.sri.total', 0)
             ->assertJsonPath('fiscalia_cedula.ok', true)
+            ->assertJsonPath('fiscalia_cedula.cedula', '0123456789')
             ->assertJsonPath('fiscalia_cedula.cantidad', 2)
             ->assertJsonPath('fiscalia_cedula.listado.0.rol', 'SOSPECHOSO')
             ->assertJsonPath('fiscalia_cedula.procesos_otros_roles', 2)

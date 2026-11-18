@@ -46,6 +46,8 @@ Route::middleware(['auth'])->group(function () {
         ->name('validacion-documentos.documento');
     Route::get('/validacion-documentos/{validacion}/cuv', [ValidacionDocumentosController::class, 'cuv'])
         ->name('validacion-documentos.cuv');
+    Route::post('/validacion-documentos/{validacion}/escanear-cuv', [ValidacionDocumentosController::class, 'escanearYCompararCuv'])
+        ->name('validacion-documentos.escanear.cuv');
     Route::post('/validacion-documentos/{validacion}/reenviar', [ValidacionDocumentosController::class, 'reenviar'])
         ->name('validacion-documentos.reenviar');
     Route::patch('/validacion-documentos/{validacion}', [ValidacionDocumentosController::class, 'decidir'])

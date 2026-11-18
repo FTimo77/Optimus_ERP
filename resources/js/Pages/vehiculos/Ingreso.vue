@@ -121,6 +121,7 @@ const enviarFormulario = () => {
             }
             mensajePlaca.value = '';
             archivoMatricula.value = null;
+            cedulaPropietarioManual.value = '';
             resultadoAuditoria.value = null;
             camposAxisPendientes.value = [];
             errorAuditoria.value = '';
@@ -131,6 +132,7 @@ const enviarFormulario = () => {
 };
 
 const archivoMatricula = ref(null);
+const cedulaPropietarioManual = ref('');
 const matriculaInput = ref(null);
 const escaneandoIA = ref(false);
 const resultadoAuditoria = ref(null);
@@ -165,6 +167,7 @@ const mostrarFormularioIngreso = computed(() =>
 
 const seleccionarMatricula = (e) => {
     archivoMatricula.value = e.target.files[0] || null;
+    cedulaPropietarioManual.value = '';
     errorAuditoria.value = '';
     erroresValidacionAuditoria.value = [];
     resultadoAuditoria.value = null;
@@ -176,6 +179,10 @@ const seleccionarMatricula = (e) => {
     form.clearErrors();
     form.ultima_fecha_revision = '';
     form.lugar_revision = '';
+};
+
+const actualizarCedulaPropietario = (event) => {
+    cedulaPropietarioManual.value = event.target.value.replace(/\D/g, '').slice(0, 10);
 };
 
 const escanearYComparar = async () => {
@@ -198,6 +205,9 @@ const escanearYComparar = async () => {
 
     const formData = new FormData();
     formData.append('documento', archivoMatricula.value);
+    if (cedulaPropietarioManual.value) {
+        formData.append('cedula_propietario', cedulaPropietarioManual.value);
+    }
 
     const mostrarError = (respuesta, mensajeAlternativo) => {
         errorAuditoria.value = respuesta?.message || mensajeAlternativo;
@@ -409,6 +419,26 @@ const escanearYComparar = async () => {
                         </div>
 
                         <div class="flex w-full flex-col gap-3 md:w-auto md:flex-row md:items-end">
+                            <div class="w-full md:w-48">
+                                <label for="cedula-propietario-auditoria" class="mb-1 block text-xs font-semibold text-gray-200">
+                                    Cédula del propietario (opcional)
+                                </label>
+                                <input
+                                    id="cedula-propietario-auditoria"
+                                    v-model="cedulaPropietarioManual"
+                                    @input="actualizarCedulaPropietario"
+                                    :disabled="escaneandoIA"
+                                    type="text"
+                                    inputmode="numeric"
+                                    maxlength="10"
+                                    autocomplete="off"
+                                    placeholder="10 dígitos"
+                                    class="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-xs text-white placeholder:text-gray-400 focus:border-yellow-400 focus:outline-none"
+                                />
+                                <p class="mt-1 text-[10px] text-gray-400">
+                                    Se usa si la IA no la detecta.
+                                </p>
+                            </div>
                             <div>
                                 <label for="documento-matricula" class="mb-1 block text-xs font-semibold text-gray-200">
                                     Matrícula
@@ -1033,7 +1063,7 @@ const escanearYComparar = async () => {
                                                 ? '⚠️ Cédula inválida para consulta'
                                                 : '⚠️ Cédula no detectada en la matrícula')
                                             : resultadoAuditoria.fiscalia_cedula?.ok === false
-                                                ? '⚠️ Fiscalía no respondió (Cédula no verificada)'
+                                                ? '⚠️ Fiscalía no pudo verificar la cédula'
                                                 : resultadoAuditoria.fiscalia_cedula?.tiene_denuncias
                                                     ? `🚨 ¡ALERTA! Propietario figura como SOSPECHOSO/DENUNCIADO en ${resultadoAuditoria.fiscalia_cedula.cantidad} caso(s)`
                                                     : '✅ Propietario sin denuncias como Sospechoso o Denunciado' }}
@@ -1043,6 +1073,13 @@ const escanearYComparar = async () => {
                                         <span v-if="resultadoAuditoria.fiscalia_cedula?.ok && !resultadoAuditoria.fiscalia_cedula?.tiene_denuncias && resultadoAuditoria.fiscalia_cedula?.procesos_otros_roles > 0" class="ml-1 text-gray-400">
                                             (Aparece en {{ resultadoAuditoria.fiscalia_cedula.procesos_otros_roles }} proceso(s) en otros roles o sin clasificación)
                                         </span>
+                                    </p>
+                                    <p
+                                        v-if="resultadoAuditoria.fiscalia_cedula?.ok === false && resultadoAuditoria.fiscalia_cedula?.motivo"
+                                        class="mt-1 break-words text-[11px] text-amber-200"
+                                        role="status"
+                                    >
+                                        Detalle de consulta: {{ resultadoAuditoria.fiscalia_cedula.motivo }}
                                     </p>
                                 </div>
                                 <span
@@ -1058,7 +1095,7 @@ const escanearYComparar = async () => {
                                             ? 'CÉDULA INVÁLIDA'
                                             : 'SIN CÉDULA')
                                         : resultadoAuditoria.fiscalia_cedula?.ok === false
-                                            ? 'NO DISPONIBLE'
+                                            ? 'NO VERIFICADA'
                                             : resultadoAuditoria.fiscalia_cedula?.tiene_denuncias
                                                 ? 'SOSPECHOSO / DENUNCIADO'
                                                 : 'LIMPIO' }}

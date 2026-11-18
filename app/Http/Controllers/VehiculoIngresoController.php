@@ -621,6 +621,7 @@ class VehiculoIngresoController extends Controller
 
         $request->validate([
             'documento' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'cedula_propietario' => ['nullable', 'string', 'regex:/^\d{10}$/'],
         ]);
 
         $archivo = $request->file('documento');
@@ -788,7 +789,8 @@ class VehiculoIngresoController extends Controller
         }
 
         // 2. Ejecutamos la Auditoría Completa en Paralelo (AxisCloud + Propietario + Multas Autority + SRI)
-        $cedulaPropietario = $datosMatricula['cedula_propietario'] ?? '';
+        $cedulaPropietario = $request->input('cedula_propietario')
+            ?? ($datosMatricula['cedula_propietario'] ?? '');
         $cedulaDoc = is_scalar($cedulaPropietario)
             ? preg_replace('/[^0-9]/', '', trim((string) $cedulaPropietario))
             : '';
@@ -1192,6 +1194,7 @@ class VehiculoIngresoController extends Controller
         $fiscPlacaRaw = is_array($paquete['fiscalia'] ?? null) ? $paquete['fiscalia'] : [];
         $resumenFiscalia = [
             'ok' => ($fiscPlacaRaw['ok'] ?? false) === true,
+            'motivo' => is_string($fiscPlacaRaw['motivo'] ?? null) ? $fiscPlacaRaw['motivo'] : null,
             'tiene_denuncias' => false,
             'cantidad' => 0,
             'listado' => [],
@@ -1212,6 +1215,7 @@ class VehiculoIngresoController extends Controller
             }
             $resumenFiscalia = [
                 'ok' => ($fiscPlacaRaw['ok'] ?? false) === true,
+                'motivo' => is_string($fiscPlacaRaw['motivo'] ?? null) ? $fiscPlacaRaw['motivo'] : null,
                 'tiene_denuncias' => true,
                 'cantidad' => count($listadoDenuncias),
                 'listado' => $listadoDenuncias,
@@ -1263,6 +1267,7 @@ class VehiculoIngresoController extends Controller
             'ok' => $consultaFiscaliaCedulaExitosa,
             'consultado' => (bool) ($fiscCedRaw['consultado'] ?? false),
             'cedula' => $textoFiscaliaCedula($fiscCedRaw['cedula'] ?? null, $cedulaDoc ?: 'No detectada'),
+            'motivo' => $textoFiscaliaCedula($fiscCedRaw['motivo'] ?? null),
             'tiene_denuncias' => count($listadoDenunciasCedula) > 0,
             'cantidad' => count($listadoDenunciasCedula),
             'procesos_otros_roles' => $procesosOtrosRoles,

@@ -1,7 +1,8 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head, Link, useForm } from '@inertiajs/vue3';
-import { computed } from 'vue';
+import axios from 'axios';
+import { computed, ref } from 'vue';
 
 const props = defineProps({
     validacion: {
@@ -17,7 +18,76 @@ const form = useForm({
     comentario_reenvio: '',
     documento_cuv: null,
 });
+const archivoCuv = ref(null);
+const escaneandoCuv = ref(false);
+const errorCuv = ref('');
+const erroresValidacionCuv = ref([]);
+const resultadoCuv = ref(props.validacion.resumen_auditoria?.cuv || null);
+const cuvUrlActual = ref(props.validacion.cuv_url || null);
 const puedeReenviar = computed(() => form.comentario_reenvio.trim().length > 0);
+const tieneResumenWeb = computed(() => Boolean(
+    props.validacion.resumen_auditoria
+    && (
+        props.validacion.resumen_auditoria.multas
+        || props.validacion.resumen_auditoria.sri
+        || props.validacion.resumen_auditoria.fiscalia
+        || props.validacion.resumen_auditoria.propietarios
+    ),
+));
+
+const seleccionarCuv = (event) => {
+    const archivo = event.target.files[0] || null;
+    archivoCuv.value = archivo;
+    form.documento_cuv = archivo;
+    errorCuv.value = '';
+    erroresValidacionCuv.value = [];
+};
+
+const escanearYCompararCuv = async () => {
+    if (!archivoCuv.value) {
+        errorCuv.value = 'Selecciona primero un archivo PDF o imagen del CUV.';
+        erroresValidacionCuv.value = [];
+        return;
+    }
+
+    escaneandoCuv.value = true;
+    errorCuv.value = '';
+    erroresValidacionCuv.value = [];
+
+    const formData = new FormData();
+    formData.append('documento_cuv', archivoCuv.value);
+
+    const mostrarError = (respuesta, mensajeAlternativo) => {
+        errorCuv.value = respuesta?.message || mensajeAlternativo;
+        erroresValidacionCuv.value = Object.values(respuesta?.errors || {})
+            .flat()
+            .filter((mensaje) => typeof mensaje === 'string');
+    };
+
+    try {
+        const res = await axios.post(
+            route('validacion-documentos.escanear.cuv', props.validacion.id),
+            formData,
+            {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            },
+        );
+
+        if (res.data && res.data.success) {
+            resultadoCuv.value = res.data;
+            if (res.data.cuv_url) {
+                cuvUrlActual.value = res.data.cuv_url;
+            }
+            form.documento_cuv = null;
+        } else {
+            mostrarError(res.data, 'El servidor no devolvió una respuesta válida al analizar el CUV.');
+        }
+    } catch (error) {
+        mostrarError(error.response?.data, error.message || 'Error al escanear el CUV.');
+    } finally {
+        escaneandoCuv.value = false;
+    }
+};
 
 const estadoTexto = (estado) => ({
     pendiente: 'Pendiente de revisión',
@@ -139,8 +209,8 @@ const reenviar = () => {
                             Descargar matrícula
                         </a>
                         <a
-                            v-if="validacion.cuv_url"
-                            :href="validacion.cuv_url"
+                            v-if="cuvUrlActual"
+                            :href="cuvUrlActual"
                             class="inline-flex rounded-md bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-600"
                         >
                             Descargar CUV
@@ -225,7 +295,7 @@ const reenviar = () => {
                 </details>
 
                 <details
-                    v-if="validacion.resumen_auditoria"
+                    v-if="tieneResumenWeb"
                     class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm"
                 >
                     <summary class="cursor-pointer border-b border-gray-200 bg-gray-50 px-5 py-3 text-sm font-semibold text-gray-900">
@@ -386,16 +456,50 @@ const reenviar = () => {
                             <label for="documento-cuv" class="block text-sm font-medium text-gray-700">
                                 Certificado Único Vehicular (CUV) (opcional)
                             </label>
-                            <input
-                                id="documento-cuv"
-                                type="file"
-                                accept="image/jpeg,image/png,image/webp,.pdf"
-                                class="mt-1 block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-700 file:px-3 file:py-2 file:text-white hover:file:bg-indigo-600"
-                                @input="form.documento_cuv = $event.target.files[0] || null"
-                            />
+                            <div class="mt-1 flex flex-col gap-3 sm:flex-row sm:items-center">
+                                <input
+                                    id="documento-cuv"
+                                    type="file"
+                                    :disabled="escaneandoCuv"
+                                    accept="image/jpeg,image/png,image/webp,.pdf"
+                                    class="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-700 file:px-3 file:py-2 file:text-white hover:file:bg-indigo-600"
+                                    @input="seleccionarCuv"
+                                />
+                                <button
+                                    type="button"
+                                    :disabled="escaneandoCuv || !archivoCuv"
+                                    class="whitespace-nowrap rounded-md bg-yellow-500 px-4 py-2 text-xs font-bold text-gray-900 shadow-sm hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                    @click="escanearYCompararCuv"
+                                >
+                                    {{ escaneandoCuv ? 'Analizando CUV con IA...' : 'Analizar y comparar CUV con IA' }}
+                                </button>
+                            </div>
                             <p class="mt-1 text-xs text-gray-500">
-                                PDF o imagen, máximo 5 MB. Se adjuntará al expediente al aprobarlo o rechazarlo.
+                                PDF o imagen, máximo 5 MB. Puedes analizarlo con Gemini para verificar que coincida con la matrícula escaneada.
                             </p>
+                            <div
+                                v-if="escaneandoCuv"
+                                role="progressbar"
+                                aria-label="Analizando CUV con Gemini"
+                                class="mt-3 h-1.5 overflow-hidden rounded-full bg-gray-200"
+                            >
+                                <div class="h-full w-1/3 animate-pulse rounded-full bg-indigo-600" />
+                            </div>
+                            <div
+                                v-if="errorCuv"
+                                role="alert"
+                                class="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700"
+                            >
+                                <p class="font-semibold">{{ errorCuv }}</p>
+                                <ul
+                                    v-if="erroresValidacionCuv.length"
+                                    class="mt-1 list-inside list-disc space-y-1"
+                                >
+                                    <li v-for="(error, index) in erroresValidacionCuv" :key="index">
+                                        {{ error }}
+                                    </li>
+                                </ul>
+                            </div>
                             <p
                                 v-if="form.errors.documento_cuv"
                                 class="mt-1 text-sm text-red-600"
@@ -403,6 +507,88 @@ const reenviar = () => {
                             >
                                 {{ form.errors.documento_cuv }}
                             </p>
+                        </div>
+
+                        <div
+                            v-if="resultadoCuv && resultadoCuv.comparacion?.length"
+                            class="overflow-hidden rounded-lg border border-gray-200 bg-gray-50 shadow-sm"
+                        >
+                            <div class="flex flex-col justify-between gap-2 border-b border-gray-200 bg-gray-900 px-4 py-3 text-xs text-white sm:flex-row sm:items-center">
+                                <span
+                                    class="font-bold uppercase tracking-wider"
+                                    :class="resultadoCuv.alertas_criticas > 0
+                                        ? 'text-red-400'
+                                        : resultadoCuv.comparacion.some((item) => item.estado !== 'coincide')
+                                            ? 'text-amber-300'
+                                            : 'text-green-400'"
+                                >
+                                    {{ resultadoCuv.alertas_criticas > 0
+                                        ? `¡Atención! Se detectaron ${resultadoCuv.alertas_criticas} discrepancia(s) crítica(s) entre Matrícula y CUV`
+                                        : resultadoCuv.comparacion.some((item) => item.estado !== 'coincide')
+                                            ? 'Comparación Matrícula vs CUV: hay campos diferentes o no verificables'
+                                            : 'Verificación exitosa: los datos del CUV coinciden con la matrícula' }}
+                                </span>
+                                <div v-if="resultadoCuv.propietario_comparacion" class="text-[11px] text-gray-300">
+                                    <span>
+                                        Matrícula:
+                                        <strong class="text-white">
+                                            {{ resultadoCuv.propietario_comparacion.nombre_matricula || 'No visible' }}
+                                            ({{ resultadoCuv.propietario_comparacion.cedula_matricula || 'S/N' }})
+                                        </strong>
+                                    </span>
+                                    <span class="mx-1">·</span>
+                                    <span>
+                                        CUV:
+                                        <strong class="text-yellow-300">
+                                            {{ resultadoCuv.propietario_comparacion.nombre_cuv || 'No visible' }}
+                                            ({{ resultadoCuv.propietario_comparacion.cedula_cuv || 'S/N' }})
+                                        </strong>
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="overflow-x-auto bg-white">
+                                <table class="min-w-full divide-y divide-gray-200 text-sm">
+                                    <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+                                        <tr>
+                                            <th class="px-4 py-2.5">Campo</th>
+                                            <th class="px-4 py-2.5">Leído en matrícula (IA)</th>
+                                            <th class="px-4 py-2.5">Leído en CUV (IA)</th>
+                                            <th class="px-4 py-2.5">Estado</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-100">
+                                        <tr
+                                            v-for="(item, index) in resultadoCuv.comparacion"
+                                            :key="`cuv-${item.clave}-${index}`"
+                                            :class="item.estado === 'diferente' && item.critico
+                                                ? 'bg-red-50/70'
+                                                : item.estado === 'casi_coincide' && item.critico
+                                                    ? 'bg-amber-50/70'
+                                                    : ''"
+                                        >
+                                            <td class="px-4 py-2.5 font-medium text-gray-800">{{ item.campo }}</td>
+                                            <td class="px-4 py-2.5 font-mono text-xs text-gray-700">{{ item.documento }}</td>
+                                            <td class="px-4 py-2.5 font-mono text-xs text-gray-700">{{ item.cuv ?? item.sistema_web }}</td>
+                                            <td class="px-4 py-2.5">
+                                                <span
+                                                    :class="{
+                                                        'bg-green-100 text-green-800': item.estado === 'coincide',
+                                                        'bg-amber-100 text-amber-800': item.estado === 'casi_coincide',
+                                                        'bg-gray-100 text-gray-700': item.estado === 'no_verificable',
+                                                        'bg-red-100 text-red-800': item.estado === 'diferente',
+                                                    }"
+                                                    class="rounded-full px-2.5 py-1 text-xs font-semibold"
+                                                >
+                                                    {{ item.estado.replaceAll('_', ' ') }}
+                                                </span>
+                                                <p v-if="item.nota" class="mt-1 max-w-xs text-xs text-gray-500">
+                                                    {{ item.nota }}
+                                                </p>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                         <div>
                             <label for="comentario-revision" class="block text-sm font-medium text-gray-700">

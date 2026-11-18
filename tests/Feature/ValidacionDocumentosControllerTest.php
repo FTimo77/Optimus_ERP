@@ -7,6 +7,7 @@ use App\Models\ValidacionDocumento;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
@@ -415,6 +416,149 @@ class ValidacionDocumentosControllerTest extends TestCase
         $this->patch(route('validacion-documentos.decidir', $validacion), [
             'decision' => 'aprobada',
         ])->assertRedirect(route('login'));
+        $this->post(route('validacion-documentos.escanear.cuv', $validacion), [
+            'documento_cuv' => UploadedFile::fake()->create('cuv.pdf', 100, 'application/pdf'),
+        ])->assertRedirect(route('login'));
+    }
+
+    public function test_reviewer_can_scan_cuv_and_compare_it_with_the_scanned_matricula_fields(): void
+    {
+        Storage::fake('local');
+        Http::preventStrayRequests();
+        config([
+            'services.gemini.api_key' => 'test-gemini-api-key',
+            'services.gemini.model' => 'gemini-3.5-flash-lite',
+        ]);
+
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::response([
+                'candidates' => [[
+                    'content' => [
+                        'parts' => [[
+                            'text' => json_encode([
+                                'placa' => 'PBA-1234',
+                                'chasis' => '9BWZZZ377VT004251',
+                                'motor' => '1NZFE123456',
+                                'marca' => 'TOYOTA',
+                                'modelo' => 'COROLLA SEDAN',
+                                'anio' => '2022',
+                                'anio_expedicion' => '2025',
+                                'fecha_emision' => '15-03-2025',
+                                'fecha_caduca' => '15-03-2026',
+                                'color' => 'BLANCO',
+                                'clase' => 'AUTOMOVIL',
+                                'servicio' => 'PARTICULAR',
+                                'propietario' => 'JUAN CARLOS PEREZ LOPEZ',
+                                'cedula_propietario' => '1712345678',
+                            ], JSON_THROW_ON_ERROR),
+                        ]],
+                    ],
+                ]],
+            ], 200),
+        ]);
+
+        $validacion = $this->createValidacion(User::factory()->create(), [
+            'datos_documento' => [
+                'placa' => 'PBA1234',
+                'chasis' => '9BWZZZ377VT004251',
+                'motor' => '1NZFE123456',
+                'marca' => 'TOYOTA',
+                'modelo' => 'COROLLA',
+                'anio' => '2022',
+                'anio_expedicion' => '2025',
+                'fecha_emision' => '15/03/2025',
+                'fecha_caduca' => '15/03/2026',
+                'color' => 'BLANCO',
+                'clase' => 'AUTOMOVIL',
+                'servicio' => 'USO PARTICULAR',
+                'propietario' => 'PEREZ LOPEZ JUAN CARLOS',
+                'cedula_propietario' => '1712345678',
+            ],
+        ]);
+
+        $response = $this->actingAs(User::factory()->create())
+            ->post(route('validacion-documentos.escanear.cuv', $validacion), [
+                'documento_cuv' => UploadedFile::fake()->create('cuv.pdf', 120, 'application/pdf'),
+            ], ['Accept' => 'application/json']);
+
+        $response->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('alertas_criticas', 0)
+            ->assertJsonPath('datos_cuv.placa', 'PBA1234')
+            ->assertJsonPath('comparacion.0.clave', 'placa')
+            ->assertJsonPath('comparacion.0.estado', 'coincide')
+            ->assertJsonPath('comparacion.1.clave', 'propietario')
+            ->assertJsonPath('comparacion.1.estado', 'coincide')
+            ->assertJsonPath('comparacion.2.clave', 'cedula_propietario')
+            ->assertJsonPath('comparacion.2.estado', 'coincide')
+            ->assertJsonPath('comparacion.3.clave', 'chasis')
+            ->assertJsonPath('comparacion.3.estado', 'coincide');
+
+        $validacionActualizada = $validacion->fresh();
+        $this->assertNotNull($validacionActualizada->ruta_cuv);
+        Storage::disk('local')->assertExists($validacionActualizada->ruta_cuv);
+        $this->assertSame(0, $validacionActualizada->resumen_auditoria['cuv']['alertas_criticas']);
+    }
+
+    public function test_cuv_scan_flags_critical_discrepancies_against_matricula_fields(): void
+    {
+        Storage::fake('local');
+        Http::preventStrayRequests();
+        config([
+            'services.gemini.api_key' => 'test-gemini-api-key',
+            'services.gemini.model' => 'gemini-3.5-flash-lite',
+        ]);
+
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::response([
+                'candidates' => [[
+                    'content' => [
+                        'parts' => [[
+                            'text' => json_encode([
+                                'placa' => 'PBA1234',
+                                'chasis' => 'CHASIS-DIFERENTE-999',
+                                'motor' => 'MOTOR-DIFERENTE-999',
+                                'marca' => 'TOYOTA',
+                                'modelo' => 'COROLLA',
+                                'anio' => '2022',
+                                'propietario' => 'OTRO PROPIETARIO DISTINTO',
+                                'cedula_propietario' => '0999999999',
+                            ], JSON_THROW_ON_ERROR),
+                        ]],
+                    ],
+                ]],
+            ], 200),
+        ]);
+
+        $validacion = $this->createValidacion(User::factory()->create(), [
+            'datos_documento' => [
+                'placa' => 'PBA1234',
+                'chasis' => '9BWZZZ377VT004251',
+                'motor' => '1NZFE123456',
+                'marca' => 'TOYOTA',
+                'modelo' => 'COROLLA',
+                'anio' => '2022',
+                'propietario' => 'JUAN CARLOS PEREZ LOPEZ',
+                'cedula_propietario' => '1712345678',
+            ],
+        ]);
+
+        $response = $this->actingAs(User::factory()->create())
+            ->post(route('validacion-documentos.escanear.cuv', $validacion), [
+                'documento_cuv' => UploadedFile::fake()->image('cuv.jpg'),
+            ], ['Accept' => 'application/json']);
+
+        $response->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('alertas_criticas', 4)
+            ->assertJsonPath('comparacion.1.clave', 'propietario')
+            ->assertJsonPath('comparacion.1.estado', 'diferente')
+            ->assertJsonPath('comparacion.2.clave', 'cedula_propietario')
+            ->assertJsonPath('comparacion.2.estado', 'diferente')
+            ->assertJsonPath('comparacion.3.clave', 'chasis')
+            ->assertJsonPath('comparacion.3.estado', 'diferente')
+            ->assertJsonPath('comparacion.4.clave', 'motor')
+            ->assertJsonPath('comparacion.4.estado', 'diferente');
     }
 
     /**
