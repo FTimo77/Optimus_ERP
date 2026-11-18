@@ -523,10 +523,10 @@ const reenviar = () => {
                                             : 'text-green-400'"
                                 >
                                     {{ resultadoCuv.alertas_criticas > 0
-                                        ? `¡Atención! Se detectaron ${resultadoCuv.alertas_criticas} discrepancia(s) crítica(s) entre Matrícula y CUV`
+                                        ? `¡Atención! Se detectaron ${resultadoCuv.alertas_criticas} alerta(s) crítica(s) en la verificación del CUV`
                                         : resultadoCuv.comparacion.some((item) => item.estado !== 'coincide')
-                                            ? 'Comparación Matrícula vs CUV: hay campos diferentes o no verificables'
-                                            : 'Verificación exitosa: los datos del CUV coinciden con la matrícula' }}
+                                            ? 'Comparación Matrícula / Formulario vs CUV: hay campos diferentes o no verificables'
+                                            : 'Verificación exitosa: los datos del CUV coinciden con la matrícula y el formulario' }}
                                 </span>
                                 <div v-if="resultadoCuv.propietario_comparacion" class="text-[11px] text-gray-300">
                                     <span>
@@ -546,12 +546,130 @@ const reenviar = () => {
                                     </span>
                                 </div>
                             </div>
+
+                            <!-- TARJETAS DE ALERTAS LEGALES Y DE DOMINIO DEL CUV -->
+                            <div
+                                v-if="resultadoCuv.alertas_cuv"
+                                class="grid grid-cols-1 gap-3 border-b border-gray-200 bg-gray-100 p-4 md:grid-cols-3"
+                            >
+                                <!-- 1. Bloqueos Vigentes -->
+                                <div
+                                    class="rounded-lg border p-3 text-xs"
+                                    :class="resultadoCuv.alertas_cuv.bloqueos?.tiene
+                                        ? 'border-red-300 bg-red-50 text-red-900'
+                                        : 'border-green-300 bg-green-50 text-green-900'"
+                                >
+                                    <div class="flex items-center justify-between gap-2">
+                                        <p class="font-bold uppercase tracking-wide">
+                                            {{ resultadoCuv.alertas_cuv.bloqueos?.tiene
+                                                ? '🚨 Bloqueos Vigentes'
+                                                : '✅ Bloqueos Vigentes' }}
+                                        </p>
+                                        <span
+                                            class="rounded-full px-2 py-0.5 text-[11px] font-bold"
+                                            :class="resultadoCuv.alertas_cuv.bloqueos?.tiene
+                                                ? 'bg-red-200 text-red-900'
+                                                : 'bg-green-200 text-green-900'"
+                                        >
+                                            {{ resultadoCuv.alertas_cuv.bloqueos?.tiene ? 'CON BLOQUEO' : 'SIN BLOQUEOS' }}
+                                        </span>
+                                    </div>
+                                    <p class="mt-1.5 font-medium">
+                                        {{ resultadoCuv.alertas_cuv.bloqueos?.estado_texto || 'NO TIENE REGISTRADOS.' }}
+                                    </p>
+                                    <ul
+                                        v-if="resultadoCuv.alertas_cuv.bloqueos?.detalle?.length"
+                                        class="mt-2 list-inside list-disc space-y-1 border-t border-red-200 pt-1.5 text-[11px]"
+                                    >
+                                        <li v-for="(item, idx) in resultadoCuv.alertas_cuv.bloqueos.detalle" :key="`bloq-${idx}`">
+                                            {{ item }}
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                <!-- 2. Gravámenes Vigentes -->
+                                <div
+                                    class="rounded-lg border p-3 text-xs"
+                                    :class="resultadoCuv.alertas_cuv.gravamenes?.tiene
+                                        ? 'border-red-300 bg-red-50 text-red-900'
+                                        : 'border-green-300 bg-green-50 text-green-900'"
+                                >
+                                    <div class="flex items-center justify-between gap-2">
+                                        <p class="font-bold uppercase tracking-wide">
+                                            {{ resultadoCuv.alertas_cuv.gravamenes?.tiene
+                                                ? '🚨 Gravámenes Vigentes'
+                                                : '✅ Gravámenes Vigentes' }}
+                                        </p>
+                                        <span
+                                            class="rounded-full px-2 py-0.5 text-[11px] font-bold"
+                                            :class="resultadoCuv.alertas_cuv.gravamenes?.tiene
+                                                ? 'bg-red-200 text-red-900'
+                                                : 'bg-green-200 text-green-900'"
+                                        >
+                                            {{ resultadoCuv.alertas_cuv.gravamenes?.tiene ? 'CON GRAVAMEN' : 'SIN GRAVÁMENES' }}
+                                        </span>
+                                    </div>
+                                    <p class="mt-1.5 font-medium">
+                                        {{ resultadoCuv.alertas_cuv.gravamenes?.estado_texto || 'NO TIENE REGISTRADOS.' }}
+                                    </p>
+                                    <ul
+                                        v-if="resultadoCuv.alertas_cuv.gravamenes?.detalle?.length"
+                                        class="mt-2 list-inside list-disc space-y-1 border-t border-red-200 pt-1.5 text-[11px]"
+                                    >
+                                        <li v-for="(item, idx) in resultadoCuv.alertas_cuv.gravamenes.detalle" :key="`grav-${idx}`">
+                                            {{ item }}
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                <!-- 3. Historia de Dominio (Cantidad de Dueños) -->
+                                <div
+                                    class="rounded-lg border p-3 text-xs"
+                                    :class="resultadoCuv.alertas_cuv.propietarios?.tiene_mas_de_un_dueno
+                                        ? 'border-amber-300 bg-amber-50 text-amber-900'
+                                        : 'border-green-300 bg-green-50 text-green-900'"
+                                >
+                                    <div class="flex items-center justify-between gap-2">
+                                        <p class="font-bold uppercase tracking-wide">
+                                            {{ resultadoCuv.alertas_cuv.propietarios?.tiene_mas_de_un_dueno
+                                                ? '⚠️ Historia de Dominio'
+                                                : '✅ Historia de Dominio' }}
+                                        </p>
+                                        <span
+                                            class="rounded-full px-2 py-0.5 text-[11px] font-bold"
+                                            :class="resultadoCuv.alertas_cuv.propietarios?.tiene_mas_de_un_dueno
+                                                ? 'bg-amber-200 text-amber-900'
+                                                : 'bg-green-200 text-green-900'"
+                                        >
+                                            {{ resultadoCuv.alertas_cuv.propietarios?.tiene_mas_de_un_dueno
+                                                ? `${resultadoCuv.alertas_cuv.propietarios.cantidad} DUEÑOS`
+                                                : '1 SOLO DUEÑO' }}
+                                        </span>
+                                    </div>
+                                    <p class="mt-1.5 font-medium">
+                                        {{ resultadoCuv.alertas_cuv.propietarios?.mensaje }}
+                                    </p>
+                                    <ul
+                                        v-if="resultadoCuv.alertas_cuv.propietarios?.listado?.length"
+                                        class="mt-2 space-y-1 border-t border-amber-200/80 pt-1.5 text-[11px]"
+                                    >
+                                        <li
+                                            v-for="(dueno, idx) in resultadoCuv.alertas_cuv.propietarios.listado"
+                                            :key="`dueno-${idx}`"
+                                            class="truncate"
+                                        >
+                                            <strong>{{ dueno.nombre }}</strong> ({{ dueno.documento_identidad }}) · {{ dueno.desde }} → {{ dueno.hasta }}
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+
                             <div class="overflow-x-auto bg-white">
                                 <table class="min-w-full divide-y divide-gray-200 text-sm">
                                     <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
                                         <tr>
                                             <th class="px-4 py-2.5">Campo</th>
-                                            <th class="px-4 py-2.5">Leído en matrícula (IA)</th>
+                                            <th class="px-4 py-2.5">Matrícula / Formulario de ingreso</th>
                                             <th class="px-4 py-2.5">Leído en CUV (IA)</th>
                                             <th class="px-4 py-2.5">Estado</th>
                                         </tr>
@@ -566,7 +684,15 @@ const reenviar = () => {
                                                     ? 'bg-amber-50/70'
                                                     : ''"
                                         >
-                                            <td class="px-4 py-2.5 font-medium text-gray-800">{{ item.campo }}</td>
+                                            <td class="px-4 py-2.5 font-medium text-gray-800">
+                                                <div>{{ item.campo }}</div>
+                                                <span
+                                                    v-if="item.origen === 'formulario_ingreso'"
+                                                    class="mt-0.5 inline-block rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700"
+                                                >
+                                                    Enviado en formulario
+                                                </span>
+                                            </td>
                                             <td class="px-4 py-2.5 font-mono text-xs text-gray-700">{{ item.documento }}</td>
                                             <td class="px-4 py-2.5 font-mono text-xs text-gray-700">{{ item.cuv ?? item.sistema_web }}</td>
                                             <td class="px-4 py-2.5">

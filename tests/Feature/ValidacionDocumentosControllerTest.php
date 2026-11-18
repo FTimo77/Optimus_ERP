@@ -436,6 +436,7 @@ class ValidacionDocumentosControllerTest extends TestCase
                     'content' => [
                         'parts' => [[
                             'text' => json_encode([
+                                'numero_cuv' => 'CUV-2026-00597334',
                                 'placa' => 'PBA-1234',
                                 'chasis' => '9BWZZZ377VT004251',
                                 'motor' => '1NZFE123456',
@@ -445,11 +446,26 @@ class ValidacionDocumentosControllerTest extends TestCase
                                 'anio_expedicion' => '2025',
                                 'fecha_emision' => '15-03-2025',
                                 'fecha_caduca' => '15-03-2026',
+                                'ultima_fecha_revision' => '16-06-2026',
+                                'lugar_revision' => 'GAD JIPIJAPA - MANABI',
                                 'color' => 'BLANCO',
                                 'clase' => 'AUTOMOVIL',
                                 'servicio' => 'PARTICULAR',
                                 'propietario' => 'JUAN CARLOS PEREZ LOPEZ',
-                                'cedula_propietario' => '1712345678',
+                                'cedula_propietario' => 'CED - 1712345678',
+                                'gravamenes_vigentes' => 'NO TIENE REGISTRADOS.',
+                                'tiene_gravamenes' => false,
+                                'bloqueos_vigentes' => 'NO TIENE REGISTRADOS.',
+                                'tiene_bloqueos' => false,
+                                'cantidad_propietarios' => 1,
+                                'tiene_mas_de_un_dueno' => false,
+                                'historia_dominio' => [[
+                                    'desde' => '28-JUL-2021',
+                                    'hasta' => 'NO REGISTRADO',
+                                    'documento_identidad' => 'CED - 1712345678',
+                                    'nombre' => 'PEREZ LOPEZ JUAN CARLOS',
+                                    'institucion' => 'CAY-GAD CAYAMBE - PICHINCHA',
+                                ]],
                             ], JSON_THROW_ON_ERROR),
                         ]],
                     ],
@@ -474,6 +490,11 @@ class ValidacionDocumentosControllerTest extends TestCase
                 'propietario' => 'PEREZ LOPEZ JUAN CARLOS',
                 'cedula_propietario' => '1712345678',
             ],
+            'datos_ingreso' => [
+                'id_vehiculo' => 'PBA1234',
+                'ultima_fecha_revision' => '16-06-2026 13:52:09',
+                'lugar_revision' => 'GAD JIPIJAPA - MANABI',
+            ],
         ]);
 
         $response = $this->actingAs(User::factory()->create())
@@ -484,6 +505,10 @@ class ValidacionDocumentosControllerTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('alertas_criticas', 0)
+            ->assertJsonPath('alertas_cuv.tiene_alertas', false)
+            ->assertJsonPath('alertas_cuv.bloqueos.tiene', false)
+            ->assertJsonPath('alertas_cuv.gravamenes.tiene', false)
+            ->assertJsonPath('alertas_cuv.propietarios.tiene_mas_de_un_dueno', false)
             ->assertJsonPath('datos_cuv.placa', 'PBA1234')
             ->assertJsonPath('comparacion.0.clave', 'placa')
             ->assertJsonPath('comparacion.0.estado', 'coincide')
@@ -492,7 +517,13 @@ class ValidacionDocumentosControllerTest extends TestCase
             ->assertJsonPath('comparacion.2.clave', 'cedula_propietario')
             ->assertJsonPath('comparacion.2.estado', 'coincide')
             ->assertJsonPath('comparacion.3.clave', 'chasis')
-            ->assertJsonPath('comparacion.3.estado', 'coincide');
+            ->assertJsonPath('comparacion.3.estado', 'coincide')
+            ->assertJsonPath('comparacion.13.clave', 'ultima_fecha_revision')
+            ->assertJsonPath('comparacion.13.origen', 'formulario_ingreso')
+            ->assertJsonPath('comparacion.13.estado', 'coincide')
+            ->assertJsonPath('comparacion.14.clave', 'lugar_revision')
+            ->assertJsonPath('comparacion.14.origen', 'formulario_ingreso')
+            ->assertJsonPath('comparacion.14.estado', 'coincide');
 
         $validacionActualizada = $validacion->fresh();
         $this->assertNotNull($validacionActualizada->ruta_cuv);
@@ -500,7 +531,7 @@ class ValidacionDocumentosControllerTest extends TestCase
         $this->assertSame(0, $validacionActualizada->resumen_auditoria['cuv']['alertas_criticas']);
     }
 
-    public function test_cuv_scan_flags_critical_discrepancies_against_matricula_fields(): void
+    public function test_cuv_scan_flags_critical_discrepancies_and_legal_domain_alerts(): void
     {
         Storage::fake('local');
         Http::preventStrayRequests();
@@ -521,8 +552,32 @@ class ValidacionDocumentosControllerTest extends TestCase
                                 'marca' => 'TOYOTA',
                                 'modelo' => 'COROLLA',
                                 'anio' => '2022',
+                                'ultima_fecha_revision' => '16-06-2026',
+                                'lugar_revision' => 'GAD JIPIJAPA - MANABI',
                                 'propietario' => 'OTRO PROPIETARIO DISTINTO',
                                 'cedula_propietario' => '0999999999',
+                                'gravamenes_vigentes' => 'PRENDA COMERCIAL BANCO PICHINCHA',
+                                'tiene_gravamenes' => true,
+                                'bloqueos_vigentes' => 'PROHIBICION DE ENAJENAR JUDICIAL',
+                                'tiene_bloqueos' => true,
+                                'cantidad_propietarios' => 2,
+                                'tiene_mas_de_un_dueno' => true,
+                                'historia_dominio' => [
+                                    [
+                                        'desde' => '10-ENE-2019',
+                                        'hasta' => '27-JUL-2021',
+                                        'documento_identidad' => 'CED - 1700000001',
+                                        'nombre' => 'PRIMER DUENO HISTORICO',
+                                        'institucion' => 'AMT QUITO',
+                                    ],
+                                    [
+                                        'desde' => '28-JUL-2021',
+                                        'hasta' => 'NO REGISTRADO',
+                                        'documento_identidad' => 'CED - 0999999999',
+                                        'nombre' => 'OTRO PROPIETARIO DISTINTO',
+                                        'institucion' => 'GAD JIPIJAPA',
+                                    ],
+                                ],
                             ], JSON_THROW_ON_ERROR),
                         ]],
                     ],
@@ -541,6 +596,11 @@ class ValidacionDocumentosControllerTest extends TestCase
                 'propietario' => 'JUAN CARLOS PEREZ LOPEZ',
                 'cedula_propietario' => '1712345678',
             ],
+            'datos_ingreso' => [
+                'id_vehiculo' => 'PBA1234',
+                'ultima_fecha_revision' => '01-01-2025 10:00:00',
+                'lugar_revision' => 'CENTRO DE REVISION QUITO NORTE',
+            ],
         ]);
 
         $response = $this->actingAs(User::factory()->create())
@@ -550,7 +610,12 @@ class ValidacionDocumentosControllerTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('success', true)
-            ->assertJsonPath('alertas_criticas', 4)
+            ->assertJsonPath('alertas_criticas', 9)
+            ->assertJsonPath('alertas_cuv.tiene_alertas', true)
+            ->assertJsonPath('alertas_cuv.bloqueos.tiene', true)
+            ->assertJsonPath('alertas_cuv.gravamenes.tiene', true)
+            ->assertJsonPath('alertas_cuv.propietarios.tiene_mas_de_un_dueno', true)
+            ->assertJsonPath('alertas_cuv.propietarios.cantidad', 2)
             ->assertJsonPath('comparacion.1.clave', 'propietario')
             ->assertJsonPath('comparacion.1.estado', 'diferente')
             ->assertJsonPath('comparacion.2.clave', 'cedula_propietario')
@@ -558,7 +623,11 @@ class ValidacionDocumentosControllerTest extends TestCase
             ->assertJsonPath('comparacion.3.clave', 'chasis')
             ->assertJsonPath('comparacion.3.estado', 'diferente')
             ->assertJsonPath('comparacion.4.clave', 'motor')
-            ->assertJsonPath('comparacion.4.estado', 'diferente');
+            ->assertJsonPath('comparacion.4.estado', 'diferente')
+            ->assertJsonPath('comparacion.13.clave', 'ultima_fecha_revision')
+            ->assertJsonPath('comparacion.13.estado', 'diferente')
+            ->assertJsonPath('comparacion.14.clave', 'lugar_revision')
+            ->assertJsonPath('comparacion.14.estado', 'diferente');
     }
 
     /**

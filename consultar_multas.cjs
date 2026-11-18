@@ -46,15 +46,43 @@ async function pedirMultasConToken(placaBuscada, token) {
                     'Referer': `https://multas.autority.io/fines?type=PLA&value=${placaBuscada}&entity=`,
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
                 },
-                signal: AbortSignal.timeout(10000)
+                signal: AbortSignal.timeout(25000)
             });
 
             const texto = await res.text();
             if (res.ok && texto.includes('"status":"success"')) {
                 return texto.trim();
             }
+            if (res.status === 401 || res.status === 403) {
+                break;
+            }
         } catch (e) {}
     }
+    return null;
+}
+
+async function crearSesionAnonimaAutority(placaBuscada) {
+    try {
+        const res = await fetch('https://api.autority.io/public/anonymous-session', {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json, text/plain, */*',
+                'Content-Type': 'application/json',
+                'Origin': 'https://multas.autority.io',
+                'Referer': `https://multas.autority.io/fines?type=PLA&value=${placaBuscada}&entity=`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+            },
+            body: JSON.stringify({ identifierType: 'PLA', value: placaBuscada }),
+            signal: AbortSignal.timeout(10000)
+        });
+        const json = await res.json();
+        const token = json?.data?.token ? String(json.data.token).trim() : '';
+        if (token) {
+            fs.mkdirSync(path.dirname(rutaTokenCache), { recursive: true });
+            fs.writeFileSync(rutaTokenCache, token, 'utf8');
+            return token;
+        }
+    } catch (e) {}
     return null;
 }
 
@@ -216,6 +244,13 @@ async function renovarTokenYConsultarConPuppeteer(placaBuscada) {
         }
 
         let jsonMultas = await pedirMultasConToken(placa, tokenActual);
+
+        if (!jsonMultas) {
+            const nuevoToken = await crearSesionAnonimaAutority(placa);
+            if (nuevoToken) {
+                jsonMultas = await pedirMultasConToken(placa, nuevoToken);
+            }
+        }
 
         if (!jsonMultas) {
             const res = await renovarTokenYConsultarConPuppeteer(placa);

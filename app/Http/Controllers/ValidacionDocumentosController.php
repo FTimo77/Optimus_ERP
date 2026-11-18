@@ -279,12 +279,15 @@ class ValidacionDocumentosController extends Controller
             ], 503);
         }
 
-        $prompt = 'Analiza este Certificado Único Vehicular (CUV) de Ecuador. Extrae solo los datos que sean visibles; no inventes ni deduzcas valores. '
+        $prompt = 'Analiza este Certificado Único Vehicular (CUV) emitido por la Agencia Nacional de Tránsito de Ecuador. '
+            .'Extrae solo los datos que sean visibles; no inventes ni deduzcas valores. '
             .'Devuelve únicamente un objeto JSON con estas claves exactas: '
-            .'{"placa": "", "chasis": "", "motor": "", "marca": "", "modelo": "", "anio": "", "anio_expedicion": "", "fecha_emision": "", "fecha_caduca": "", "color": "", "clase": "", "servicio": "", "propietario": "", "cedula_propietario": ""}. '
-            .'En "anio" indica únicamente el año de fabricación/modelo y en "anio_expedicion" el año de emisión o certificado. '
-            .'Copia "fecha_emision" y "fecha_caduca" tal como aparecen, sin inferirlas de otras fechas. '
-            .'Si un dato no es legible o no aparece, usa una cadena vacía.';
+            .'{"numero_cuv": "", "placa": "", "chasis": "", "motor": "", "marca": "", "modelo": "", "anio": "", "anio_expedicion": "", "fecha_emision": "", "fecha_caduca": "", "ultima_fecha_revision": "", "lugar_revision": "", "color": "", "clase": "", "tipo_vehiculo": "", "servicio": "", "cilindraje": "", "pais": "", "combustible": "", "propietario": "", "cedula_propietario": "", "gravamenes_vigentes": "", "tiene_gravamenes": false, "detalle_gravamenes": [], "bloqueos_vigentes": "", "tiene_bloqueos": false, "detalle_bloqueos": [], "cantidad_propietarios": 0, "tiene_mas_de_un_dueno": false, "historia_dominio": [{"desde": "", "hasta": "", "documento_identidad": "", "nombre": "", "institucion": ""}]}. '
+            .'En "anio" indica el "Año de Modelo", en "anio_expedicion" el "Último Año Autorizado", en "fecha_emision" la fecha de "Última Matrícula", en "fecha_caduca" la "Fecha Vigencia Matrícula", en "ultima_fecha_revision" la fecha de "Última Revisión" y en "lugar_revision" el "Lugar de Última Revisión". '
+            .'En "cedula_propietario" extrae el número de "Documento de Identidad" de DATOS DEL PROPIETARIO (sin el prefijo "CED - "). '
+            .'En "gravamenes_vigentes" y "bloqueos_vigentes" copia el texto exacto de "Información de Gravámenes Vigentes" e "Información de Bloqueos Vigentes"; pon "tiene_gravamenes" o "tiene_bloqueos" en true únicamente si existen gravámenes o bloqueos activos (false si dice "NO TIENE REGISTRADOS"). '
+            .'En "historia_dominio" extrae todas las filas de la tabla ".:Historia de Dominio:.", coloca en "cantidad_propietarios" el número total de dueños registrados en esa tabla y pon "tiene_mas_de_un_dueno" en true si hay más de 1 dueño. '
+            .'Si un dato no es legible o no aparece, usa una cadena vacía (o arreglo vacío).';
 
         $model = config('services.gemini.model', 'gemini-3.5-flash-lite');
 
@@ -392,8 +395,25 @@ class ValidacionDocumentosController extends Controller
         if (empty($datosMatricula['placa'])) {
             $datosMatricula['placa'] = $validacion->placa;
         }
+        $datosIngreso = is_array($validacion->datos_ingreso) ? $validacion->datos_ingreso : [];
 
         $normalizar = fn (mixed $valor): string => strtoupper(preg_replace('/[^A-Z0-9]/', '', (string) $valor) ?? '');
+        $normalizarIdentificacion = static function (mixed $valor) use ($normalizar): string {
+            $texto = trim((string) $valor);
+            if ($texto === '') {
+                return '';
+            }
+
+            $sinPrefijo = preg_replace('/^\s*(?:CED(?:ULA)?|RUC|PAS(?:APORTE)?)\s*[-:.\s]*/iu', '', $texto) ?? $texto;
+            $soloDigitos = preg_replace('/\D+/', '', $sinPrefijo) ?? '';
+
+            return strlen($soloDigitos) >= 9 ? $soloDigitos : $normalizar($sinPrefijo);
+        };
+        $normalizarTextoSinTildes = static fn (string $txt): string => trim(
+            preg_replace('/\s+/', ' ', preg_replace('/[^A-Z0-9\s]/', ' ', strtr(mb_strtoupper($txt, 'UTF-8'), [
+                'Á' => 'A', 'É' => 'E', 'Í' => 'I', 'Ó' => 'O', 'Ú' => 'U', 'Ü' => 'U', 'Ñ' => 'N',
+            ])) ?? '') ?? ''
+        );
         $normalizarFecha = function (string $fecha): ?string {
             $fecha = trim($fecha);
 
@@ -427,33 +447,47 @@ class ValidacionDocumentosController extends Controller
         };
 
         $camposComparar = [
-            'placa' => ['campo' => 'Placa', 'documento' => 'placa', 'cuv' => 'placa'],
-            'propietario' => ['campo' => 'Propietario Actual', 'documento' => 'propietario', 'cuv' => 'propietario'],
-            'cedula_propietario' => ['campo' => 'Cédula / RUC del Propietario', 'documento' => 'cedula_propietario', 'cuv' => 'cedula_propietario'],
-            'chasis' => ['campo' => 'Chasis (VIN)', 'documento' => 'chasis', 'cuv' => 'chasis'],
-            'motor' => ['campo' => 'Número de Motor', 'documento' => 'motor', 'cuv' => 'motor'],
-            'marca' => ['campo' => 'Marca', 'documento' => 'marca', 'cuv' => 'marca'],
-            'modelo' => ['campo' => 'Modelo', 'documento' => 'modelo', 'cuv' => 'modelo'],
-            'anio' => ['campo' => 'Año de Fabricación', 'documento' => 'anio', 'cuv' => 'anio'],
-            'fecha_emision' => ['campo' => 'Fecha de emisión', 'documento' => 'fecha_emision', 'cuv' => 'fecha_emision'],
-            'fecha_caduca' => ['campo' => 'Fecha de caducidad', 'documento' => 'fecha_caduca', 'cuv' => 'fecha_caduca'],
-            'color' => ['campo' => 'Color Principal', 'documento' => 'color', 'cuv' => 'color'],
-            'clase' => ['campo' => 'Clase de Vehículo', 'documento' => 'clase', 'cuv' => 'clase'],
-            'servicio' => ['campo' => 'Tipo de Servicio', 'documento' => 'servicio', 'cuv' => 'servicio'],
+            'placa' => ['campo' => 'Placa', 'documento' => 'placa', 'cuv' => 'placa', 'origen' => 'matricula'],
+            'propietario' => ['campo' => 'Propietario Actual', 'documento' => 'propietario', 'cuv' => 'propietario', 'origen' => 'matricula'],
+            'cedula_propietario' => ['campo' => 'Cédula / RUC del Propietario', 'documento' => 'cedula_propietario', 'cuv' => 'cedula_propietario', 'origen' => 'matricula'],
+            'chasis' => ['campo' => 'Chasis (VIN)', 'documento' => 'chasis', 'cuv' => 'chasis', 'origen' => 'matricula'],
+            'motor' => ['campo' => 'Número de Motor', 'documento' => 'motor', 'cuv' => 'motor', 'origen' => 'matricula'],
+            'marca' => ['campo' => 'Marca', 'documento' => 'marca', 'cuv' => 'marca', 'origen' => 'matricula'],
+            'modelo' => ['campo' => 'Modelo', 'documento' => 'modelo', 'cuv' => 'modelo', 'origen' => 'matricula'],
+            'anio' => ['campo' => 'Año de Fabricación', 'documento' => 'anio', 'cuv' => 'anio', 'origen' => 'matricula'],
+            'fecha_emision' => ['campo' => 'Fecha de emisión / Última matrícula', 'documento' => 'fecha_emision', 'cuv' => 'fecha_emision', 'origen' => 'matricula'],
+            'fecha_caduca' => ['campo' => 'Fecha de caducidad / Vigencia matrícula', 'documento' => 'fecha_caduca', 'cuv' => 'fecha_caduca', 'origen' => 'matricula'],
+            'color' => ['campo' => 'Color Principal', 'documento' => 'color', 'cuv' => 'color', 'origen' => 'matricula'],
+            'clase' => ['campo' => 'Clase de Vehículo', 'documento' => 'clase', 'cuv' => 'clase', 'origen' => 'matricula'],
+            'servicio' => ['campo' => 'Tipo de Servicio', 'documento' => 'servicio', 'cuv' => 'servicio', 'origen' => 'matricula'],
+            'ultima_fecha_revision' => [
+                'campo' => 'Última fecha de revisión (Formulario de ingreso)',
+                'documento' => 'ultima_fecha_revision',
+                'cuv' => 'ultima_fecha_revision',
+                'origen' => 'formulario_ingreso',
+            ],
+            'lugar_revision' => [
+                'campo' => 'Lugar de última revisión (Formulario de ingreso)',
+                'documento' => 'lugar_revision',
+                'cuv' => 'lugar_revision',
+                'origen' => 'formulario_ingreso',
+            ],
         ];
 
-        $camposFecha = ['fecha_emision', 'fecha_caduca'];
-        $camposCriticos = ['chasis', 'motor', 'placa', 'propietario', 'cedula_propietario'];
+        $camposFecha = ['fecha_emision', 'fecha_caduca', 'ultima_fecha_revision'];
+        $camposCriticos = ['chasis', 'motor', 'placa', 'propietario', 'cedula_propietario', 'ultima_fecha_revision', 'lugar_revision'];
         $comparacion = [];
         $alertasCriticas = 0;
         $anioExpedicionMatricula = $normalizar($datosMatricula['anio_expedicion'] ?? '');
         $anioExpedicionCuv = $normalizar($datosCuv['anio_expedicion'] ?? '');
 
         foreach ($camposComparar as $clave => $configuracionCampo) {
-            $valDoc = trim((string) ($datosMatricula[$configuracionCampo['documento']] ?? ''));
+            $esFormularioIngreso = ($configuracionCampo['origen'] ?? 'matricula') === 'formulario_ingreso';
+            $fuenteBase = $esFormularioIngreso ? $datosIngreso : $datosMatricula;
+            $valDoc = trim((string) ($fuenteBase[$configuracionCampo['documento']] ?? ''));
             $valCuv = trim((string) ($datosCuv[$configuracionCampo['cuv']] ?? ''));
-            $normDoc = $normalizar($valDoc);
-            $normCuv = $normalizar($valCuv);
+            $normDoc = $clave === 'cedula_propietario' ? $normalizarIdentificacion($valDoc) : $normalizar($valDoc);
+            $normCuv = $clave === 'cedula_propietario' ? $normalizarIdentificacion($valCuv) : $normalizar($valCuv);
 
             if ($clave === 'placa' && strlen($normDoc) >= 6) {
                 if (preg_match('/^([A-Z]{3})(\d{3})$/', $normDoc, $partesDoc)) {
@@ -467,7 +501,9 @@ class ValidacionDocumentosController extends Controller
 
             if ($normDoc === '' || $normCuv === '') {
                 $nota = $normDoc === ''
-                    ? 'Dato no legible en la matrícula.'
+                    ? ($esFormularioIngreso
+                        ? 'Dato no enviado por el usuario en el formulario de ingreso.'
+                        : 'Dato no legible en la matrícula.')
                     : 'Dato no legible en el CUV.';
             } elseif (in_array($clave, $camposFecha, true)) {
                 $fechaDocumento = $normalizarFecha($valDoc);
@@ -480,7 +516,42 @@ class ValidacionDocumentosController extends Controller
                     $estado = 'coincide';
                 } else {
                     $estado = 'diferente';
-                    $nota = 'La fecha de la matrícula no coincide con la fecha del CUV.';
+                    $nota = $clave === 'ultima_fecha_revision'
+                        ? 'La fecha de revisión enviada en el formulario no coincide con la Última Revisión del CUV.'
+                        : 'La fecha de la matrícula no coincide con la fecha del CUV.';
+                }
+            } elseif ($clave === 'lugar_revision') {
+                $lugarUsuarioLimpio = $normalizarTextoSinTildes($valDoc);
+                $lugarCuvLimpio = $normalizarTextoSinTildes($valCuv);
+                $compactoUsuario = str_replace(' ', '', $lugarUsuarioLimpio);
+                $compactoCuv = str_replace(' ', '', $lugarCuvLimpio);
+
+                if ($compactoUsuario === $compactoCuv
+                    || (min(strlen($compactoUsuario), strlen($compactoCuv)) >= 4
+                        && (str_contains($compactoCuv, $compactoUsuario) || str_contains($compactoUsuario, $compactoCuv)))) {
+                    $coincide = true;
+                    $estado = 'coincide';
+                } else {
+                    $stopWordsLugar = ['GAD', 'DE', 'DEL', 'LA', 'EL', 'LOS', 'LAS', 'CENTRO', 'REVISION', 'TECNICA', 'VEHICULAR', 'MUNICIPAL', 'CANTON', 'PROVINCIA', 'EMPRESA', 'PUBLICA', 'TRANSITO', 'MOVILIDAD'];
+                    $extraerPalabrasLugar = static fn (string $txt): array => array_values(array_filter(
+                        explode(' ', $txt),
+                        static fn (string $w): bool => strlen($w) >= 3 && ! in_array($w, $stopWordsLugar, true),
+                    ));
+                    $palabrasUsuario = $extraerPalabrasLugar($lugarUsuarioLimpio);
+                    $palabrasCuv = $extraerPalabrasLugar($lugarCuvLimpio);
+                    $interseccionLugar = count(array_intersect($palabrasUsuario, $palabrasCuv));
+                    $minPalabrasLugar = min(count($palabrasUsuario), count($palabrasCuv));
+
+                    if ($minPalabrasLugar > 0 && $interseccionLugar === $minPalabrasLugar) {
+                        $coincide = true;
+                        $estado = 'coincide';
+                    } elseif ($interseccionLugar >= 1) {
+                        $estado = 'casi_coincide';
+                        $nota = 'Coincidencia parcial en el lugar de revisión. Confirma la localidad en el CUV.';
+                    } else {
+                        $estado = 'diferente';
+                        $nota = 'El lugar de revisión enviado en el formulario no coincide con el Lugar de Última Revisión del CUV.';
+                    }
                 }
             } elseif ($normDoc === $normCuv) {
                 $coincide = true;
@@ -536,10 +607,13 @@ class ValidacionDocumentosController extends Controller
                 $alertasCriticas++;
             }
 
+            $etiquetaVacia = $esFormularioIngreso ? 'No enviado en formulario' : 'No detectado';
+
             $comparacion[] = [
                 'campo' => $configuracionCampo['campo'],
                 'clave' => $clave,
-                'documento' => $valDoc ?: 'No detectado',
+                'origen' => $configuracionCampo['origen'],
+                'documento' => $valDoc ?: $etiquetaVacia,
                 'cuv' => $valCuv ?: 'No detectado',
                 'sistema_web' => $valCuv ?: 'No detectado',
                 'coincide' => $coincide,
@@ -548,6 +622,151 @@ class ValidacionDocumentosController extends Controller
                 'critico' => in_array($clave, $camposCriticos, true),
             ];
         }
+
+        // Evaluación de alertas legales y de dominio del CUV (Bloqueos, Gravámenes y Cantidad de Dueños)
+        $esSinRegistro = static function (string $texto) use ($normalizarTextoSinTildes): bool {
+            $limpio = $normalizarTextoSinTildes($texto);
+
+            return $limpio === ''
+                || str_contains($limpio, 'NO TIENE REGISTRADO')
+                || str_contains($limpio, 'NO REGISTRA')
+                || str_contains($limpio, 'SIN REGISTRO')
+                || str_contains($limpio, 'SIN GRAVAMEN')
+                || str_contains($limpio, 'SIN BLOQUEO')
+                || in_array($limpio, ['NO', 'NINGUNO', 'NINGUNA', 'N A', 'NA'], true);
+        };
+
+        $evaluarEstadoRestriccion = static function (
+            mixed $textoRaw,
+            mixed $flagRaw,
+            mixed $detalleRaw,
+            string $nombreRestriccion,
+        ) use ($esSinRegistro): array {
+            $texto = is_scalar($textoRaw) ? trim((string) $textoRaw) : '';
+            $detalles = [];
+
+            if (is_array($detalleRaw)) {
+                foreach ($detalleRaw as $item) {
+                    $linea = is_scalar($item)
+                        ? trim((string) $item)
+                        : (is_array($item) ? trim(implode(' · ', array_filter(array_map(
+                            static fn (mixed $v): string => is_scalar($v) ? trim((string) $v) : '',
+                            $item,
+                        )))) : '');
+
+                    if ($linea !== '' && ! $esSinRegistro($linea)) {
+                        $detalles[] = $linea;
+                    }
+                }
+            }
+
+            $textoIndicaSinRegistro = $texto !== '' && $esSinRegistro($texto);
+            $tieneRestriccion = count($detalles) > 0
+                || ($texto !== '' && ! $textoIndicaSinRegistro)
+                || ($flagRaw === true && ! $textoIndicaSinRegistro);
+
+            if ($tieneRestriccion && $detalles === [] && $texto !== '') {
+                $detalles[] = $texto;
+            }
+
+            return [
+                'tiene' => $tieneRestriccion,
+                'estado_texto' => $texto !== ''
+                    ? $texto
+                    : ($tieneRestriccion ? "CON {$nombreRestriccion} VIGENTES" : 'NO TIENE REGISTRADOS.'),
+                'detalle' => $detalles,
+                'mensaje' => $tieneRestriccion
+                    ? "¡Alerta! El CUV registra {$nombreRestriccion} vigentes sobre el vehículo."
+                    : "Sin {$nombreRestriccion} vigentes registrados en el CUV.",
+            ];
+        };
+
+        $alertaGravamenes = $evaluarEstadoRestriccion(
+            $datosCuv['gravamenes_vigentes'] ?? null,
+            $datosCuv['tiene_gravamenes'] ?? false,
+            $datosCuv['detalle_gravamenes'] ?? [],
+            'gravámenes',
+        );
+        $alertaBloqueos = $evaluarEstadoRestriccion(
+            $datosCuv['bloqueos_vigentes'] ?? null,
+            $datosCuv['tiene_bloqueos'] ?? false,
+            $datosCuv['detalle_bloqueos'] ?? [],
+            'bloqueos',
+        );
+
+        // Historia de Dominio (Propietarios históricos en el CUV)
+        $historiaDominioRaw = is_array($datosCuv['historia_dominio'] ?? null) ? $datosCuv['historia_dominio'] : [];
+        $historiaDominio = [];
+
+        foreach ($historiaDominioRaw as $fila) {
+            if (! is_array($fila)) {
+                continue;
+            }
+
+            $nombre = trim((string) ($fila['nombre'] ?? $fila['nombre_completo'] ?? ''));
+            $docId = trim((string) ($fila['documento_identidad'] ?? $fila['doc_id'] ?? $fila['cedula'] ?? ''));
+            $desde = trim((string) ($fila['desde'] ?? ''));
+            $hasta = trim((string) ($fila['hasta'] ?? ''));
+            $institucion = trim((string) ($fila['institucion'] ?? ''));
+
+            if ($nombre === '' && $docId === '') {
+                continue;
+            }
+
+            $historiaDominio[] = [
+                'desde' => $desde ?: 'No registrado',
+                'hasta' => $hasta ?: 'NO REGISTRADO',
+                'documento_identidad' => $docId ?: 'S/N',
+                'nombre' => $nombre ?: 'No visible',
+                'institucion' => $institucion ?: 'No registrada',
+            ];
+        }
+
+        $cantidadPropietariosReportada = is_numeric($datosCuv['cantidad_propietarios'] ?? null)
+            ? max(0, (int) $datosCuv['cantidad_propietarios'])
+            : 0;
+        $cantidadPropietarios = max($cantidadPropietariosReportada, count($historiaDominio));
+        if ($cantidadPropietarios === 0 && ! empty($datosCuv['propietario'])) {
+            $cantidadPropietarios = 1;
+        }
+
+        $tieneMasDeUnDueno = $cantidadPropietarios > 1
+            || (($datosCuv['tiene_mas_de_un_dueno'] ?? false) === true && count($historiaDominio) !== 1);
+
+        if ($tieneMasDeUnDueno && $cantidadPropietarios <= 1) {
+            $cantidadPropietarios = 2;
+        }
+
+        $alertaPropietarios = [
+            'tiene_mas_de_un_dueno' => $tieneMasDeUnDueno,
+            'cantidad' => $cantidadPropietarios,
+            'listado' => $historiaDominio,
+            'mensaje' => $tieneMasDeUnDueno
+                ? "¡Alerta! El vehículo ha tenido más de un dueño ({$cantidadPropietarios} propietarios registrados en Historia de Dominio)."
+                : 'Un solo dueño registrado en la Historia de Dominio del CUV.',
+        ];
+
+        $listaAlertasCuv = [];
+        if ($alertaBloqueos['tiene']) {
+            $alertasCriticas++;
+            $listaAlertasCuv[] = $alertaBloqueos['mensaje'];
+        }
+        if ($alertaGravamenes['tiene']) {
+            $alertasCriticas++;
+            $listaAlertasCuv[] = $alertaGravamenes['mensaje'];
+        }
+        if ($alertaPropietarios['tiene_mas_de_un_dueno']) {
+            $alertasCriticas++;
+            $listaAlertasCuv[] = $alertaPropietarios['mensaje'];
+        }
+
+        $alertasCuv = [
+            'tiene_alertas' => count($listaAlertasCuv) > 0,
+            'mensajes' => $listaAlertasCuv,
+            'bloqueos' => $alertaBloqueos,
+            'gravamenes' => $alertaGravamenes,
+            'propietarios' => $alertaPropietarios,
+        ];
 
         $rutaCuvNueva = $archivo->store("validacion-documentos/{$validacion->id}/cuv", 'local');
         if (! is_string($rutaCuvNueva)) {
@@ -560,6 +779,7 @@ class ValidacionDocumentosController extends Controller
         $rutaCuvAnterior = $validacion->ruta_cuv;
         $resumenCuv = [
             'alertas_criticas' => $alertasCriticas,
+            'alertas_cuv' => $alertasCuv,
             'datos_cuv' => $datosCuv,
             'comparacion' => $comparacion,
             'propietario_comparacion' => [
@@ -612,6 +832,7 @@ class ValidacionDocumentosController extends Controller
             'success' => true,
             'validacion_id' => $validacion->id,
             'alertas_criticas' => $alertasCriticas,
+            'alertas_cuv' => $alertasCuv,
             'propietario_comparacion' => $resumenCuv['propietario_comparacion'],
             'datos_matricula' => $datosMatricula,
             'datos_cuv' => $datosCuv,
