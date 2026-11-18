@@ -794,6 +794,9 @@ class VehiculoIngresoController extends Controller
         $cedulaDoc = is_scalar($cedulaPropietario)
             ? preg_replace('/[^0-9]/', '', trim((string) $cedulaPropietario))
             : '';
+        if (is_string($cedulaDoc) && preg_match('/^(\d{10})001$/', $cedulaDoc, $partesCedula)) {
+            $cedulaDoc = $partesCedula[1];
+        }
         $archivoTemp = storage_path('app/auditoria_'.bin2hex(random_bytes(12)).'.json');
         if (file_exists($archivoTemp)) {
             @unlink($archivoTemp);

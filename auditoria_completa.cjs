@@ -11,7 +11,9 @@ const arg4Raw = (process.argv[4] || '').trim().replace(/^["']+|["']+$/g, '');
 // En PowerShell, pasar "" puede eliminarse como argumento y desplazar la cédula a argv[3]
 const arg3EsCedula = arg4Raw === '' && /^\d{10}(\d{3})?$/.test(arg3Raw);
 const archivoSalida = arg3EsCedula ? '' : arg3Raw;
-const cedula = (arg3EsCedula ? arg3Raw : arg4Raw).replace(/[^0-9]/g, '');
+const cedula = (arg3EsCedula ? arg3Raw : arg4Raw)
+    .replace(/[^0-9]/g, '')
+    .replace(/^(\d{10})001$/, '$1');
 
 if (!placaRaw) {
     console.log(JSON.stringify({ status: 'error', message: 'Placa vacía' }));
@@ -370,7 +372,9 @@ async function consultarFiscalia(browser, placaBuscada) {
 }
 
 async function consultarFiscaliaCedula(browser, cedulaBuscada) {
-    const limpia = String(cedulaBuscada || '').replace(/[^0-9]/g, '');
+    const limpia = String(cedulaBuscada || '')
+        .replace(/[^0-9]/g, '')
+        .replace(/^(\d{10})001$/, '$1');
     if (limpia.length !== 10 && limpia.length !== 13) {
         return {
             ok: false,

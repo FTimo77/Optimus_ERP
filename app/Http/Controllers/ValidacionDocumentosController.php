@@ -406,6 +406,9 @@ class ValidacionDocumentosController extends Controller
 
             $sinPrefijo = preg_replace('/^\s*(?:CED(?:ULA)?|RUC|PAS(?:APORTE)?)\s*[-:.\s]*/iu', '', $texto) ?? $texto;
             $soloDigitos = preg_replace('/\D+/', '', $sinPrefijo) ?? '';
+            if (preg_match('/^(\d{10})001$/', $soloDigitos, $partesCedula)) {
+                $soloDigitos = $partesCedula[1];
+            }
 
             return strlen($soloDigitos) >= 9 ? $soloDigitos : $normalizar($sinPrefijo);
         };
