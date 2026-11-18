@@ -21,8 +21,12 @@ class FakeAxisVehiculoIngresoController extends VehiculoIngresoController
      */
     public static array $respuestaAxis = [];
 
-    protected function ejecutarAuditoriaCompleta(string $placa, string $archivoTemp): int
+    public static string $cedulaRecibida = '';
+
+    protected function ejecutarAuditoriaCompleta(string $placa, string $archivoTemp, string $cedula): int
     {
+        self::$cedulaRecibida = $cedula;
+
         return file_put_contents($archivoTemp, json_encode(self::$respuestaAxis, JSON_THROW_ON_ERROR)) === false ? 1 : 0;
     }
 }
@@ -126,6 +130,7 @@ class VehiculoIngresoControllerTest extends TestCase
                             'parts' => [
                                 ['text' => json_encode([
                                     'placa' => 'PBA1234',
+                                    'cedula_propietario' => '0123456789',
                                     'fecha_emision' => '16-JUN-2026',
                                     'fecha_caduca' => '31/03/2029',
                                 ], JSON_THROW_ON_ERROR)],
@@ -141,6 +146,14 @@ class VehiculoIngresoControllerTest extends TestCase
         ]);
         FakeAxisVehiculoIngresoController::$respuestaAxis = [
             'codError' => '0',
+            'multas' => [
+                'status' => 'success',
+                'data' => [],
+            ],
+            'fiscalia' => [
+                'ok' => true,
+                'listado' => [],
+            ],
             'campos' => json_encode([
                 'lsDatosIdentificacion' => [
                     ['etiqueta' => 'Placa:', 'valor' => 'PBA1234'],
@@ -168,6 +181,19 @@ class VehiculoIngresoControllerTest extends TestCase
                     ['etiqueta' => 'Última Revisión Hasta:', 'valor' => '31-03-2026 00:00:00'],
                 ],
             ], JSON_THROW_ON_ERROR),
+            'fiscalia_cedula' => [
+                'ok' => true,
+                'consultado' => true,
+                'cedula' => '0123456789',
+                'total_procesos_vista' => 4,
+                'procesos_otros_roles' => 2,
+                'listado' => [
+                    ['ndd' => 'NDD-001', 'rol' => 'SOSPECHOSO'],
+                    ['ndd' => 'NDD-002', 'rol' => 'DENUNCIADO'],
+                    ['ndd' => 'NDD-003', 'rol' => 'VICTIMA'],
+                    ['ndd' => 'NDD-004', 'rol' => 'NO DENUNCIADO'],
+                ],
+            ],
         ];
         $this->app->bind(VehiculoIngresoController::class, FakeAxisVehiculoIngresoController::class);
         $user = User::factory()->create();
@@ -184,14 +210,23 @@ class VehiculoIngresoControllerTest extends TestCase
             ->assertJsonPath('datos_oficiales.cilindraje', '1800 cc')
             ->assertJsonPath('datos_oficiales.fecha_matricula_desde', '16-06-2026 09:38:04')
             ->assertJsonPath('datos_oficiales.fecha_matricula_hasta', '31-03-2029 00:00:00')
+            ->assertJsonPath('ultima_fecha_revision', '20-03-2025 13:52:09')
+            ->assertJsonPath('datos_oficiales.ultima_fecha_revision', '20-03-2025 13:52:09')
             ->assertJsonPath('datos_oficiales.fecha_ultima_revision_desde', '20-03-2025 13:52:09')
             ->assertJsonPath('datos_oficiales.fecha_ultima_revision_hasta', '31-03-2026 00:00:00')
             ->assertJsonPath('datos_oficiales.anio_ultima_revision', '2025')
             ->assertJsonPath('resumen_auditoria.multas.total', 0)
             ->assertJsonPath('resumen_auditoria.sri.total', 0)
+            ->assertJsonPath('fiscalia_cedula.ok', true)
+            ->assertJsonPath('fiscalia_cedula.cantidad', 2)
+            ->assertJsonPath('fiscalia_cedula.listado.0.rol', 'SOSPECHOSO')
+            ->assertJsonPath('fiscalia_cedula.procesos_otros_roles', 2)
+            ->assertJsonPath('resumen_auditoria.fiscalia_cedula.ok', true)
+            ->assertJsonPath('resumen_auditoria.fiscalia.ok', true)
             ->assertJsonPath('comparacion.7.estado', 'coincide')
             ->assertJsonPath('comparacion.8.estado', 'coincide');
 
+        $this->assertSame('0123456789', FakeAxisVehiculoIngresoController::$cedulaRecibida);
         $this->assertNotContains('fecha_revision', array_column($response->json('comparacion'), 'clave'));
 
         $validacion = ValidacionDocumento::findOrFail($response->json('validacion_id'));
@@ -232,7 +267,10 @@ class VehiculoIngresoControllerTest extends TestCase
                 'candidates' => [[
                     'content' => [
                         'parts' => [[
-                            'text' => json_encode(['placa' => 'PBA1234'], JSON_THROW_ON_ERROR),
+                            'text' => json_encode([
+                                'placa' => 'PBA1234',
+                                'cedula_propietario' => '0123456789',
+                            ], JSON_THROW_ON_ERROR),
                         ]],
                     ],
                 ]],
@@ -244,6 +282,17 @@ class VehiculoIngresoControllerTest extends TestCase
         ]);
         FakeAxisVehiculoIngresoController::$respuestaAxis = [
             'codError' => '0',
+            'fiscalia' => [
+                'ok' => false,
+                'listado' => [],
+            ],
+            'fiscalia_cedula' => [
+                'ok' => false,
+                'consultado' => true,
+                'cedula' => '0123456789',
+                'motivo' => 'fiscalia_no_disponible',
+                'listado' => [],
+            ],
             'campos' => json_encode([
                 'lsDatosIdentificacion' => [
                     ['etiqueta' => 'Placa:', 'valor' => 'PBA1234'],
@@ -262,14 +311,20 @@ class VehiculoIngresoControllerTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('estado_revision', 'borrador')
+            ->assertJsonPath('fiscalia_cedula.ok', false)
+            ->assertJsonPath('fiscalia_cedula.consultado', true)
+            ->assertJsonPath('fiscalia_cedula.tiene_denuncias', false)
+            ->assertJsonPath('resumen_auditoria.fiscalia_cedula.ok', false)
+            ->assertJsonPath('resumen_auditoria.fiscalia.ok', false)
             ->assertJsonPath('campos_axis_pendientes.0', 'id_marca')
             ->assertJsonPath('campos_axis_pendientes.6', 'cilindraje');
+        $this->assertSame('0123456789', FakeAxisVehiculoIngresoController::$cedulaRecibida);
         $validacion = ValidacionDocumento::findOrFail($response->json('validacion_id'));
         $this->assertSame('', $validacion->datos_oficiales['cilindraje']);
         Storage::disk('local')->assertExists($validacion->ruta_documento);
     }
 
-    public function test_successful_axiscloud_audit_registers_vehicle_using_only_official_vehicle_data(): void
+    public function test_successful_axiscloud_audit_sends_vehicle_to_review_before_registration(): void
     {
         Storage::fake('local');
         Storage::fake('public');
@@ -295,6 +350,7 @@ class VehiculoIngresoControllerTest extends TestCase
                 'cilindraje' => '1600 cc',
                 'tipo_vehiculo' => 'SUV',
                 'servicio' => 'Particular',
+                'ultima_fecha_revision' => '20-03-2025 13:52:09',
             ],
             'comparacion' => [],
             'alertas_criticas' => 0,
@@ -315,14 +371,38 @@ class VehiculoIngresoControllerTest extends TestCase
             'chasis' => 'CHASIS-FALSO-001',
             'cilindraje' => '1800 cc',
             'costo_adquisicion' => 18000,
+            'ultima_fecha_revision' => '20-03-2025 15:10:00',
+            'lugar_revision' => 'Centro de revisión Quito Norte',
+            'comentario_solicitud' => 'Verificar el kilometraje al recibirlo.',
             'validacion_id' => $validacion->id,
             'imagenes' => [UploadedFile::fake()->image('vehiculo.jpg')],
         ]);
 
-        $response->assertRedirect(route('vehiculos.create'));
+        $response->assertRedirect(route('validacion-documentos.show', $validacion));
         $this->assertDatabaseMissing('vehiculos', [
             'id_vehiculo' => 'FAKE9999',
         ]);
+
+        $validacion->refresh();
+        $this->assertSame('pendiente', $validacion->estado_revision);
+        $this->assertSame('Verificar el kilometraje al recibirlo.', $validacion->comentario_solicitud);
+        $this->assertSame('20-03-2025 15:10:00', $validacion->datos_ingreso['ultima_fecha_revision']);
+        $this->assertSame('Centro de revisión Quito Norte', $validacion->datos_ingreso['lugar_revision']);
+        $this->assertSame('20-03-2025 13:52:09', $validacion->datos_oficiales['ultima_fecha_revision']);
+        $this->assertSame('Kona', $validacion->datos_ingreso['modelo']);
+        $this->assertSame('MOTOR-AXIS-001', $validacion->datos_ingreso['motor']);
+        $this->assertCount(1, $validacion->datos_ingreso['imagenes']);
+        Storage::disk('local')->assertExists($validacion->datos_ingreso['imagenes'][0]);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
+
+        $this->actingAs(User::factory()->create())
+            ->patch(route('validacion-documentos.decidir', $validacion), [
+                'decision' => 'aprobada',
+            ])
+            ->assertRedirect(route('validacion-documentos.show', $validacion));
+
         $this->assertDatabaseHas('vehiculos', [
             'id_vehiculo' => 'PBA1234',
             'id_marca' => DB::table('marca_vehiculos')->where('nombre', 'Hyundai')->value('id_marca'),
@@ -338,11 +418,15 @@ class VehiculoIngresoControllerTest extends TestCase
             'chasis' => 'CHASIS-AXIS-001',
             'cilindraje' => '1600 cc',
             'costo_adquisicion' => 18000,
+            'fecha_revision' => '2025-03-20 15:10:00',
+            'lugar_revision' => 'Centro de revisión Quito Norte',
         ]);
         $this->assertDatabaseHas('validacion_documentos', [
             'id' => $validacion->id,
-            'estado_revision' => 'registrada',
+            'estado_revision' => 'aprobada',
         ]);
+        $this->assertSame('20-03-2025 15:10:00', $validacion->fresh()->datos_ingreso['ultima_fecha_revision']);
+        $this->assertSame('Centro de revisión Quito Norte', $validacion->fresh()->datos_ingreso['lugar_revision']);
         $this->assertDatabaseHas('documentos_vehiculos', [
             'id_vehiculo' => 'PBA1234',
             'ruta_matricula' => $rutaMatricula,
@@ -357,6 +441,63 @@ class VehiculoIngresoControllerTest extends TestCase
             'es_principal' => true,
         ]);
         Storage::disk('public')->assertExists($imagenPublica);
+    }
+
+    public function test_audited_submission_requires_review_date_and_location(): void
+    {
+        Storage::fake('local');
+        $catalogIds = $this->createCatalogs();
+        $user = User::factory()->create();
+        $rutaMatricula = 'validacion-documentos/documento-revision.jpg';
+        Storage::disk('local')->put($rutaMatricula, 'matricula');
+        $validacion = ValidacionDocumento::create([
+            'placa' => 'PBA1234',
+            'ruta_documento' => $rutaMatricula,
+            'mime_type' => 'image/jpeg',
+            'datos_documento' => ['placa' => 'PBA1234'],
+            'datos_oficiales' => [
+                'placa' => 'PBA1234',
+                'marca' => 'Hyundai',
+                'clase' => 'SUV',
+                'pais' => 'Corea del Sur',
+                'color' => 'Azul',
+                'modelo' => 'Kona',
+                'anio' => '2023',
+                'motor' => 'MOTOR-AXIS-REVIEW-001',
+                'chasis' => 'CHASIS-AXIS-REVIEW-001',
+                'cilindraje' => '1600 cc',
+                'tipo_vehiculo' => 'SUV',
+                'servicio' => 'Particular',
+            ],
+            'comparacion' => [],
+            'alertas_criticas' => 0,
+            'estado_revision' => 'borrador',
+            'subido_por' => $user->id,
+        ]);
+
+        $response = $this->actingAs($user)
+            ->from(route('vehiculos.create'))
+            ->post(route('vehiculos.store'), [
+                ...$catalogIds,
+                'validacion_id' => $validacion->id,
+                'id_vehiculo' => 'PBA1234',
+                'modelo' => 'Kona',
+                'anio' => 2023,
+                'motor' => 'MOTOR-AXIS-REVIEW-001',
+                'chasis' => 'CHASIS-AXIS-REVIEW-001',
+                'cilindraje' => '1600 cc',
+                'costo_adquisicion' => 18000,
+            ]);
+
+        $response->assertRedirectBack()
+            ->assertSessionHasErrors(['ultima_fecha_revision', 'lugar_revision']);
+        $this->assertDatabaseHas('validacion_documentos', [
+            'id' => $validacion->id,
+            'estado_revision' => 'borrador',
+        ]);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
     }
 
     public function test_missing_axiscloud_cilindraje_can_be_filled_without_overriding_other_official_data(): void
@@ -401,6 +542,8 @@ class VehiculoIngresoControllerTest extends TestCase
             'motor' => 'MOTOR-MANIPULADO',
             'chasis' => 'CHASIS-MANIPULADO',
             'costo_adquisicion' => 18000,
+            'ultima_fecha_revision' => '20-03-2025 13:52:09',
+            'lugar_revision' => 'Centro de revisión Quito Norte',
         ];
 
         $this->actingAs($user)
@@ -422,7 +565,20 @@ class VehiculoIngresoControllerTest extends TestCase
             'cilindraje' => '1600 cc',
         ]);
 
-        $response->assertRedirect(route('vehiculos.create'));
+        $response->assertRedirect(route('validacion-documentos.show', $validacion));
+        $validacion->refresh();
+        $this->assertSame('pendiente', $validacion->estado_revision);
+        $this->assertSame('1600 cc', $validacion->datos_ingreso['cilindraje']);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
+
+        $this->actingAs(User::factory()->create())
+            ->patch(route('validacion-documentos.decidir', $validacion), [
+                'decision' => 'aprobada',
+            ])
+            ->assertRedirect(route('validacion-documentos.show', $validacion));
+
         $this->assertDatabaseHas('vehiculos', [
             'id_vehiculo' => 'PBA1234',
             'id_marca' => DB::table('marca_vehiculos')->where('nombre', 'Hyundai')->value('id_marca'),
@@ -439,7 +595,7 @@ class VehiculoIngresoControllerTest extends TestCase
         ]);
         $this->assertDatabaseHas('validacion_documentos', [
             'id' => $validacion->id,
-            'estado_revision' => 'registrada',
+            'estado_revision' => 'aprobada',
         ]);
     }
 

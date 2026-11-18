@@ -1,0 +1,66 @@
+{
+  "status": "success",
+  "placa": "PFI0582",
+  "cedula": "",
+  "propietario": {
+    "ok": true,
+    "nombre": "PERUGACHI TORRES EVELYN MARIA"
+  },
+  "multas": {
+    "status": "success",
+    "code": 200,
+    "data": []
+  },
+  "sri": {
+    "ok": true,
+    "vehiculo": {
+      "codigoVehiculo": 1020415,
+      "numeroPlaca": "PFI0582",
+      "numeroCamvCpn": "G00072034",
+      "colorVehiculo1": null,
+      "colorVehiculo2": null,
+      "cilindraje": null,
+      "nombreClase": null,
+      "descripcionMarca": "VOLKSWAGEN",
+      "descripcionModelo": "GOL 1.6 CL COUPE",
+      "anioAuto": 1999,
+      "descripcionPais": "BRASIL",
+      "mensajeMotivoAuto": null,
+      "aplicaCuota": false,
+      "fechaUltimaMatricula": null,
+      "fechaCaducidadMatricula": null,
+      "fechaCompraRegistro": null,
+      "fechaRevision": null,
+      "descripcionCanton": null,
+      "descripcionServicio": null,
+      "ultimoAnioPagado": 2026,
+      "prohibidoEnajenar": null,
+      "observacion": null,
+      "estadoExoneracion": "NO",
+      "verMensajeElectricos": false
+    },
+    "rubros": [],
+    "total_transferencias": 3
+  },
+  "axis": {
+    "codError": "0",
+    "campos": "{\"lsUltimaActualizacion\":\"\",\"lsServicio\":\"USO PARTICULAR\",\"lsPlaca\":\"PFI0582\",\"lsDatosIdentificacion\":[{\"valor\":\"9BWA37312XT003473\",\"etiqueta\":\"VIN:\"},{\"valor\":\"UNF026323\",\"etiqueta\":\"Motor:\"},{\"valor\":\"PFI0582\",\"etiqueta\":\"Placa:\"},{\"valor\":\"FACTURA\",\"etiqueta\":\"Placa Anterior:\"}],\"lsDatosModelo\":[{\"valor\":\"VOLKSWAGEN\",\"etiqueta\":\"Marca:\"},{\"valor\":\"GOL 1.6 CL COUPE\",\"etiqueta\":\"Modelo:\"},{\"valor\":\"1999\",\"etiqueta\":\"Año Fabricación:\"},{\"valor\":\"BRASIL\",\"etiqueta\":\"País Fabricación:\"}],\"lsOtrasCaracteristicas\":[{\"valor\":\"AUTOMOVIL\",\"etiqueta\":\"Clase Vehículo:\"},{\"valor\":\"SEDAN\",\"etiqueta\":\"Tipo Vehículo:\"},{\"valor\":\"BLANCO\",\"etiqueta\":\"Color 1:\"},{\"valor\":\"BLANCO\",\"etiqueta\":\"Color 2:\"},{\"valor\":\"0,75\",\"etiqueta\":\"Peso:\"},{\"valor\":\"METALICA\",\"etiqueta\":\"Carrocería:\"}],\"lsCrv\":[{\"valor\":\"N\",\"etiqueta\":\"Indicador CRV:\"},{\"valor\":\"\",\"etiqueta\":\"Orden CRV:\"},{\"valor\":\"\",\"etiqueta\":\"Centro Retención:\"},{\"valor\":\"\",\"etiqueta\":\"Tipo Retención:\"},{\"valor\":\"\",\"etiqueta\":\"Motivo Retención:\"},{\"valor\":\"\",\"etiqueta\":\"Fecha Inicio Retención:\"},{\"valor\":\"\",\"etiqueta\":\"Días Retención:\"},{\"valor\":\"\",\"etiqueta\":\"Grúa:\"},{\"valor\":\"\",\"etiqueta\":\"Área Ubicación:\"},{\"valor\":\"\",\"etiqueta\":\"Columna:\"},{\"valor\":\"\",\"etiqueta\":\"Fila:\"}],\"lsRevision\":[{\"valor\":\"04-03-2024 16:54:06\",\"etiqueta\":\"Matrícula Desde:\"},{\"valor\":\"31-03-2029 00:00:00\",\"etiqueta\":\"Matrícula Hasta:\"},{\"valor\":\"2025\",\"etiqueta\":\"Año Última Revisión:\"},{\"valor\":\"20-03-2025 13:52:09\",\"etiqueta\":\"Última Revisión Desde:\"},{\"valor\":\"31-03-2026 00:00:00\",\"etiqueta\":\"Última Revisión Hasta:\"}]}"
+  },
+  "fiscalia": {
+    "ok": false,
+    "tiene_denuncias": false,
+    "cantidad": 0,
+    "listado": []
+  },
+  "fiscalia_cedula": {
+    "ok": false,
+    "consultado": false,
+    "cedula": "",
+    "motivo": "cedula_invalida",
+    "tiene_denuncias": false,
+    "cantidad": 0,
+    "total_procesos_vista": 0,
+    "procesos_otros_roles": 0,
+    "listado": []
+  }
+}

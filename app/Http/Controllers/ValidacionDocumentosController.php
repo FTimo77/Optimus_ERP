@@ -12,6 +12,7 @@ use App\Models\vehiculo as Vehiculo;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -86,6 +87,58 @@ class ValidacionDocumentosController extends Controller
             }
         }
 
+        $comparacion = $validacion->comparacion ?? [];
+        $ultimaFechaRevisionUsuario = trim((string) ($datosIngresoOriginal['ultima_fecha_revision'] ?? ''));
+        $ultimaFechaRevisionAxis = trim((string) (
+            $validacion->datos_oficiales['ultima_fecha_revision']
+            ?? $validacion->datos_oficiales['fecha_ultima_revision_desde']
+            ?? ''
+        ));
+
+        if ($ultimaFechaRevisionUsuario !== '' || $ultimaFechaRevisionAxis !== '') {
+            $parseFechaRevision = static function (string $fecha): ?\DateTimeImmutable {
+                $fechaParseada = \DateTimeImmutable::createFromFormat('!d-m-Y H:i:s', $fecha);
+
+                return $fechaParseada !== false && $fechaParseada->format('d-m-Y H:i:s') === $fecha
+                    ? $fechaParseada
+                    : null;
+            };
+            $fechaUsuario = $parseFechaRevision($ultimaFechaRevisionUsuario);
+            $fechaAxis = $parseFechaRevision($ultimaFechaRevisionAxis);
+            $fechaCoincide = $fechaUsuario !== null
+                && $fechaAxis !== null
+                && $fechaUsuario->format('Y-m-d H:i:s') === $fechaAxis->format('Y-m-d H:i:s');
+            $fechaVerificable = $fechaUsuario !== null && $fechaAxis !== null;
+
+            $comparacion[] = [
+                'campo' => 'Última fecha de revisión',
+                'clave' => 'ultima_fecha_revision',
+                'documento' => $ultimaFechaRevisionUsuario ?: 'No ingresada por el usuario',
+                'sistema_web' => $ultimaFechaRevisionAxis ?: 'No disponible',
+                'coincide' => $fechaCoincide,
+                'estado' => ! $fechaVerificable ? 'no_verificable' : ($fechaCoincide ? 'coincide' : 'diferente'),
+                'nota' => ! $fechaVerificable
+                    ? 'No se pudo comparar la fecha ingresada con la fecha de AxisCloud.'
+                    : '',
+                'critico' => false,
+            ];
+        }
+
+        $lugarRevision = trim((string) ($datosIngresoOriginal['lugar_revision'] ?? ''));
+
+        if ($lugarRevision !== '') {
+            $comparacion[] = [
+                'campo' => 'Lugar de revisión (dato informativo)',
+                'clave' => 'lugar_revision',
+                'documento' => $lugarRevision,
+                'sistema_web' => 'No se compara con AxisCloud',
+                'coincide' => false,
+                'estado' => 'informativo',
+                'nota' => 'Dato ingresado por el usuario; se muestra solo como información.',
+                'critico' => false,
+            ];
+        }
+
         return Inertia::render('ValidacionDocumentos/Show', [
             'validacion' => [
                 'id' => $validacion->id,
@@ -93,7 +146,7 @@ class ValidacionDocumentosController extends Controller
                 'estado_revision' => $validacion->estado_revision,
                 'datos_documento' => $validacion->datos_documento,
                 'datos_oficiales' => $validacion->datos_oficiales,
-                'comparacion' => $validacion->comparacion,
+                'comparacion' => $comparacion,
                 'resumen_auditoria' => $validacion->resumen_auditoria,
                 'datos_ingreso' => $datosIngresoParaVista,
                 'alertas_criticas' => $validacion->alertas_criticas,
@@ -335,6 +388,8 @@ class ValidacionDocumentosController extends Controller
             'cilindraje' => ['required', 'string', 'max:100'],
             'servicio' => ['nullable', 'string', 'max:100'],
             'tipo_vehiculo' => ['nullable', 'string', 'max:100'],
+            'ultima_fecha_revision' => ['nullable', 'date_format:d-m-Y H:i:s'],
+            'lugar_revision' => ['nullable', 'string', 'max:150'],
             'kilometraje' => ['nullable', 'integer', 'min:0'],
             'costo_adquisicion' => ['required', 'numeric', 'min:0'],
             'precio_venta' => ['nullable', 'numeric', 'min:0', 'gte:costo_adquisicion'],
@@ -362,7 +417,14 @@ class ValidacionDocumentosController extends Controller
 
         $tipoVehiculo = $datosValidados['tipo_vehiculo'] ?? null;
         $servicio = $datosValidados['servicio'] ?? null;
-        $atributosVehiculo = Arr::except($datosValidados, ['imagenes', 'tipo_vehiculo', 'servicio']);
+        $fechaRevision = $datosValidados['ultima_fecha_revision'] ?? null;
+        $atributosVehiculo = Arr::except($datosValidados, [
+            'imagenes',
+            'tipo_vehiculo',
+            'servicio',
+            'ultima_fecha_revision',
+            'lugar_revision',
+        ]);
         $atributosVehiculo['id_estado'] = EstadoVehiculo::firstOrCreate(['nombre' => 'Creado'])->id_estado;
         $atributosVehiculo['id_tipo_vehiculo'] = $tipoVehiculo === null
             ? null
@@ -370,8 +432,18 @@ class ValidacionDocumentosController extends Controller
         $atributosVehiculo['id_servicio'] = $servicio === null
             ? null
             : Servicio::firstOrCreate(['nombre' => $servicio])->id_servicio;
+        $atributosVehiculo['fecha_revision'] = $fechaRevision === null
+            ? null
+            : Carbon::createFromFormat('d-m-Y H:i:s', $fechaRevision)->format('Y-m-d H:i:s');
+        $atributosVehiculo['lugar_revision'] = $datosValidados['lugar_revision'] ?? null;
 
         $vehiculo = Vehiculo::create($atributosVehiculo);
+
+        $documentosVehiculo = ['id_vehiculo' => $vehiculo->id_vehiculo];
+
+        if ($validacion->ruta_documento !== null) {
+            $documentosVehiculo['ruta_matricula'] = $validacion->ruta_documento;
+        }
 
         if ($validacion->ruta_cuv !== null) {
             if (! Storage::disk('local')->exists($validacion->ruta_cuv)) {
@@ -380,10 +452,11 @@ class ValidacionDocumentosController extends Controller
                 ]);
             }
 
-            Documentos_vehiculo::create([
-                'id_vehiculo' => $vehiculo->id_vehiculo,
-                'ruta_cuv' => $validacion->ruta_cuv,
-            ]);
+            $documentosVehiculo['ruta_cuv'] = $validacion->ruta_cuv;
+        }
+
+        if (count($documentosVehiculo) > 1) {
+            Documentos_vehiculo::create($documentosVehiculo);
         }
 
         foreach ($rutasImagenesTemporales as $index => $rutaImagenTemporal) {

@@ -62,6 +62,8 @@ const campoIngresoTexto = (campo) => ({
     cilindraje: 'Cilindraje',
     servicio: 'Servicio',
     tipo_vehiculo: 'Tipo de vehículo',
+    ultima_fecha_revision: 'Última fecha de revisión',
+    lugar_revision: 'Lugar de revisión',
     kilometraje: 'Kilometraje',
     costo_adquisicion: 'Costo de adquisición',
     precio_venta: 'Precio de venta',
@@ -184,7 +186,7 @@ const reenviar = () => {
                             <thead class="bg-white text-left text-xs uppercase tracking-wide text-gray-500">
                                 <tr>
                                     <th class="px-5 py-3">Campo</th>
-                                    <th class="px-5 py-3">Matrícula</th>
+                                    <th class="px-5 py-3">Matrícula / dato ingresado</th>
                                     <th class="px-5 py-3">AxisCloud</th>
                                     <th class="px-5 py-3">Estado</th>
                                 </tr>
@@ -201,6 +203,7 @@ const reenviar = () => {
                                                 'bg-amber-100 text-amber-800': item.estado === 'casi_coincide',
                                                 'bg-gray-100 text-gray-700': item.estado === 'no_verificable',
                                                 'bg-red-100 text-red-800': item.estado === 'diferente',
+                                                'bg-blue-100 text-blue-800': item.estado === 'informativo',
                                             }"
                                             class="rounded-full px-2.5 py-1 text-xs font-semibold"
                                         >
@@ -246,7 +249,9 @@ const reenviar = () => {
                             <div class="rounded-md bg-gray-50 p-3 text-sm">
                                 <p class="font-medium text-gray-600">Denuncias en Fiscalía</p>
                                 <p class="mt-1 font-semibold text-gray-900">
-                                    {{ validacion.resumen_auditoria.fiscalia?.cantidad || 0 }} registro(s)
+                                    {{ validacion.resumen_auditoria.fiscalia?.ok === false
+                                        ? 'Consulta no disponible'
+                                        : `${validacion.resumen_auditoria.fiscalia?.cantidad || 0} registro(s)` }}
                                 </p>
                             </div>
                             <div class="rounded-md bg-gray-50 p-3 text-sm">
@@ -255,6 +260,35 @@ const reenviar = () => {
                                     {{ validacion.resumen_auditoria.propietarios?.total_traspasos || 0 }}
                                 </p>
                             </div>
+                        </div>
+                        <div
+                            v-if="validacion.resumen_auditoria.fiscalia_cedula"
+                            class="mt-3 rounded-md border p-3 text-sm"
+                            :class="!validacion.resumen_auditoria.fiscalia_cedula.ok
+                                ? 'border-amber-200 bg-amber-50 text-amber-900'
+                                : validacion.resumen_auditoria.fiscalia_cedula.tiene_denuncias
+                                    ? 'border-red-200 bg-red-50 text-red-900'
+                                    : 'border-green-200 bg-green-50 text-green-900'"
+                        >
+                            <p class="font-semibold">Fiscalía por cédula del propietario</p>
+                            <p class="mt-1">
+                                {{ !validacion.resumen_auditoria.fiscalia_cedula.ok
+                                    ? 'Consulta no disponible; no se puede confirmar ausencia de denuncias.'
+                                    : validacion.resumen_auditoria.fiscalia_cedula.tiene_denuncias
+                                        ? `Se encontraron ${validacion.resumen_auditoria.fiscalia_cedula.cantidad} proceso(s) como sospechoso o denunciado.`
+                                        : 'Sin procesos como sospechoso o denunciado en la consulta realizada.' }}
+                            </p>
+                            <ul
+                                v-if="validacion.resumen_auditoria.fiscalia_cedula.listado?.length"
+                                class="mt-2 space-y-2 border-t border-gray-300 pt-2"
+                            >
+                                <li
+                                    v-for="(denuncia, index) in validacion.resumen_auditoria.fiscalia_cedula.listado"
+                                    :key="index"
+                                >
+                                    {{ denuncia.noticia_delito }} · {{ denuncia.fecha }} · {{ denuncia.rol }} · {{ denuncia.localidad }} · {{ denuncia.descripcion }}
+                                </li>
+                            </ul>
                         </div>
                         <p class="mt-3 text-sm text-gray-700">
                             {{ validacion.resumen_auditoria.propietarios?.mensaje }}

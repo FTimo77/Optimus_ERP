@@ -82,6 +82,17 @@ class VehiculoIngresoController extends Controller
             'id_vehiculo' => ['required', 'string', 'max:20', 'unique:vehiculos,id_vehiculo'],
             'validacion_id' => ['nullable', 'integer', 'exists:validacion_documentos,id'],
             'comentario_solicitud' => ['nullable', 'string', 'max:2000'],
+            'ultima_fecha_revision' => [
+                $validacionAuditoria !== null ? 'required' : 'nullable',
+                'string',
+                'max:100',
+                ...($validacionAuditoria !== null ? ['date_format:d-m-Y H:i:s'] : []),
+            ],
+            'lugar_revision' => [
+                $validacionAuditoria !== null ? 'required' : 'nullable',
+                'string',
+                'max:150',
+            ],
             'documento_matricula' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'imagenes' => ['nullable', 'array', 'max:10'],
             'imagenes.*' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
@@ -118,6 +129,15 @@ class VehiculoIngresoController extends Controller
                 $request,
                 $validated,
                 $documentoMatricula,
+                $comentarioSolicitud,
+            );
+        }
+
+        if ($validacionAuditoria !== null) {
+            return $this->enviarAuditoriaARevision(
+                $request,
+                $validacionAuditoria,
+                $validated,
                 $comentarioSolicitud,
             );
         }
@@ -308,6 +328,83 @@ class VehiculoIngresoController extends Controller
         }
 
         return $pendientes;
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function enviarAuditoriaARevision(
+        Request $request,
+        ValidacionDocumento $validacion,
+        array $validated,
+        string $comentarioSolicitud,
+    ): RedirectResponse {
+        $placa = strtoupper(preg_replace('/[^A-Z0-9]/', '', $validated['id_vehiculo']) ?? '');
+
+        if ($placa !== $validacion->placa) {
+            throw ValidationException::withMessages([
+                'id_vehiculo' => 'La placa de los datos de ingreso debe coincidir con la matrícula auditada.',
+            ]);
+        }
+
+        if (Vehiculo::query()->whereKey($placa)->exists()) {
+            throw ValidationException::withMessages([
+                'id_vehiculo' => 'La placa ya existe en el inventario.',
+            ]);
+        }
+
+        $imagenes = $validated['imagenes'] ?? [];
+        unset($validated['imagenes']);
+        $validated['id_vehiculo'] = $placa;
+        $rutasImagenesTemporales = [];
+
+        try {
+            foreach ($imagenes as $imagen) {
+                $rutaImagen = $imagen->store("validacion-documentos/{$validacion->id}/imagenes", 'local');
+
+                if (! is_string($rutaImagen)) {
+                    throw new RuntimeException('No se pudo guardar una imagen del vehículo para revisión.');
+                }
+
+                $rutasImagenesTemporales[] = $rutaImagen;
+            }
+
+            $datosIngreso = [...$validated, 'imagenes' => $rutasImagenesTemporales];
+
+            DB::transaction(function () use ($request, $validacion, $datosIngreso, $comentarioSolicitud): void {
+                $validacionBloqueada = ValidacionDocumento::query()
+                    ->whereKey($validacion->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                if ($validacionBloqueada->subido_por !== $request->user()->id
+                    || $validacionBloqueada->estado_revision !== 'borrador'
+                    || $validacionBloqueada->placa !== $datosIngreso['id_vehiculo']) {
+                    throw ValidationException::withMessages([
+                        'validacion_id' => 'La auditoría ya no está disponible para enviar a revisión.',
+                    ]);
+                }
+
+                $validacionBloqueada->update([
+                    'estado_revision' => 'pendiente',
+                    'datos_ingreso' => $datosIngreso,
+                    'comentario_solicitud' => $comentarioSolicitud === '' ? null : $comentarioSolicitud,
+                ]);
+            });
+        } catch (Throwable $exception) {
+            if ($rutasImagenesTemporales !== []
+                && ! Storage::disk('local')->delete($rutasImagenesTemporales)) {
+                Log::warning('Could not remove temporary vehicle images after audited submission failed.', [
+                    'validacion_id' => $validacion->id,
+                    'file_paths' => $rutasImagenesTemporales,
+                ]);
+            }
+
+            throw $exception;
+        }
+
+        return to_route('validacion-documentos.show', $validacion)
+            ->with('success', 'Auditoría enviada a revisión manual. El vehículo se incorporará al inventario solo si se aprueba.');
     }
 
     /**
@@ -691,12 +788,16 @@ class VehiculoIngresoController extends Controller
         }
 
         // 2. Ejecutamos la Auditoría Completa en Paralelo (AxisCloud + Propietario + Multas Autority + SRI)
+        $cedulaPropietario = $datosMatricula['cedula_propietario'] ?? '';
+        $cedulaDoc = is_scalar($cedulaPropietario)
+            ? preg_replace('/[^0-9]/', '', trim((string) $cedulaPropietario))
+            : '';
         $archivoTemp = storage_path('app/auditoria_'.bin2hex(random_bytes(12)).'.json');
         if (file_exists($archivoTemp)) {
             @unlink($archivoTemp);
         }
 
-        $codigoSalidaAuditoria = $this->ejecutarAuditoriaCompleta($placa, $archivoTemp);
+        $codigoSalidaAuditoria = $this->ejecutarAuditoriaCompleta($placa, $archivoTemp, $cedulaDoc);
 
         $datosOficiales = [];
         $axisDisponible = false;
@@ -755,35 +856,62 @@ class VehiculoIngresoController extends Controller
                     'rubros' => $listaRubrosSRI,
                 ];
 
-                // C. Multas de Tránsito (Autority)
-                $listaMultasRaw = is_array($paquete['multas']['data'] ?? null) ? $paquete['multas']['data'] : [];
+                // 3. Multas de Tránsito (Autority: soporta tipo AUTORITY y tipo SERVIPAGOS)
+                $autorityRespondio = ($paquete['multas']['status'] ?? '') === 'success';
+                $listaMultasRaw = ($autorityRespondio && is_array($paquete['multas']['data'] ?? null))
+                    ? $paquete['multas']['data']
+                    : [];
+
                 $totalMultas = 0.0;
+                $cantidadTotalMultas = 0;
                 $listadoMultas = [];
 
                 foreach ($listaMultasRaw as $m) {
                     if (! is_array($m)) {
                         continue;
                     }
-                    $val = (float) ($m['totalValue'] ?? $m['valueFine'] ?? 0);
+
+                    // Si ya aparece como pagada, la ignoramos
+                    if (! empty($m['paid'])) {
+                        continue;
+                    }
+
+                    // Extraemos el valor buscando en ambos formatos (SERVIPAGOS usa valorTotal / data_extra.valueFine, AUTORITY usa totalValue / valueFine)
+                    $val = (float) (
+                        $m['totalValue']
+                        ?? $m['valorTotal']
+                        ?? $m['valueFine']
+                        ?? ($m['data_extra']['valueFine'] ?? null)
+                        ?? $m['total']
+                        ?? 0
+                    );
+
                     $totalMultas += $val;
+
+                    // Si un registro agrupa varias multas (ej. totalFines: 2 en SERVIPAGOS), sumamos esa cantidad real
+                    $numInfraccionesItem = (int) ($m['totalFines'] ?? 1);
+                    $cantidadTotalMultas += max(1, $numInfraccionesItem);
+
                     $listadoMultas[] = [
-                        'citacion' => (string) ($m['nCitacion'] ?? $m['nInfraccion'] ?? 'S/N'),
-                        'entidad' => (string) ($m['entity'] ?? 'Tránsito'),
-                        'fecha' => (string) ($m['issuanceDate'] ?? $m['registrationDate'] ?? ''),
-                        'descripcion' => (string) ($m['description'] ?? 'Infracción de tránsito'),
-                        'valor_base' => round((float) ($m['valueFine'] ?? $val), 2),
-                        'interes' => round((float) ($m['interestValue'] ?? 0), 2),
-                        'descuento' => round((float) ($m['exemptValue'] ?? 0), 2),
+                        'citacion' => (string) ($m['nCitacion'] ?? $m['nInfraccion'] ?? $m['id'] ?? 'S/N'),
+                        'entidad' => (string) ($m['entity'] ?? $m['entidad'] ?? $m['entityName'] ?? 'Tránsito'),
+                        'fecha' => (string) ($m['issuanceDate'] ?? $m['registrationDate'] ?? $m['fecha'] ?? ''),
+                        'descripcion' => (string) ($m['description'] ?? $m['descripcion'] ?? ($m['data_extra']['serviceName'] ?? 'Infracción de tránsito')),
                         'total' => round($val, 2),
                         'puntos' => (int) ($m['points'] ?? 0),
                     ];
                 }
 
                 $resumenMultas = [
-                    'ok' => ($paquete['multas']['status'] ?? '') === 'success',
-                    'tiene_multas' => count($listadoMultas) > 0,
-                    'cantidad' => count($listadoMultas),
-                    'total' => round($totalMultas, 2),
+                    'ok' => $autorityRespondio,
+                    'tiene_multas' => $autorityRespondio && count($listadoMultas) > 0,
+                    'cantidad' => $cantidadTotalMultas,
+                    'cantidad_multas' => $cantidadTotalMultas,
+                    'total' => $autorityRespondio ? round($totalMultas, 2) : null,
+                    'total_pagar' => $autorityRespondio ? round($totalMultas, 2) : null,
+                    'mensaje' => $autorityRespondio
+                        ? 'Fuente oficial: Autority'
+                        : 'Autority no respondió en este intento. Verifique manualmente o reintente.',
                     'listado' => $listadoMultas,
                 ];
 
@@ -818,6 +946,7 @@ class VehiculoIngresoController extends Controller
                     $modeloInfo = is_array($rawAxis['lsDatosModelo'] ?? null) ? $rawAxis['lsDatosModelo'] : [];
                     $otrasInfo = is_array($rawAxis['lsOtrasCaracteristicas'] ?? null) ? $rawAxis['lsOtrasCaracteristicas'] : [];
                     $revisionInfo = is_array($rawAxis['lsRevision'] ?? null) ? $rawAxis['lsRevision'] : [];
+                    $ultimaFechaRevision = $extraerValor($revisionInfo, 'Última Revisión Desde');
 
                     $datosOficiales = [
                         'placa' => $extraerValor($identificacion, 'Placa'),
@@ -835,7 +964,8 @@ class VehiculoIngresoController extends Controller
                         'servicio' => trim((string) ($rawAxis['lsServicio'] ?? '')),
                         'fecha_matricula_desde' => $extraerValor($revisionInfo, 'Matrícula Desde'),
                         'fecha_matricula_hasta' => $extraerValor($revisionInfo, 'Matrícula Hasta'),
-                        'fecha_ultima_revision_desde' => $extraerValor($revisionInfo, 'Última Revisión Desde'),
+                        'ultima_fecha_revision' => $ultimaFechaRevision,
+                        'fecha_ultima_revision_desde' => $ultimaFechaRevision,
                         'fecha_ultima_revision_hasta' => $extraerValor($revisionInfo, 'Última Revisión Hasta'),
                         'anio_ultima_revision' => $extraerValor($revisionInfo, 'Año Última Revisión'),
                         'ultimo_anio_pagado_sri' => $resumenSRI['ultimo_anio'],
@@ -1057,13 +1187,16 @@ class VehiculoIngresoController extends Controller
             ];
         }
 
-        // E. Procesar Denuncias (Fiscalía General del Estado)
+        // E. Procesar Denuncias (Fiscalía General del Estado - Por Placa y Por Cédula)
+        // E.1 Denuncias por Placa
+        $fiscPlacaRaw = is_array($paquete['fiscalia'] ?? null) ? $paquete['fiscalia'] : [];
         $resumenFiscalia = [
+            'ok' => ($fiscPlacaRaw['ok'] ?? false) === true,
             'tiene_denuncias' => false,
             'cantidad' => 0,
             'listado' => [],
         ];
-        $listaDenunciasRaw = is_array($paquete['fiscalia']['listado'] ?? null) ? $paquete['fiscalia']['listado'] : [];
+        $listaDenunciasRaw = is_array($fiscPlacaRaw['listado'] ?? null) ? $fiscPlacaRaw['listado'] : [];
         if (count($listaDenunciasRaw) > 0) {
             $listadoDenuncias = [];
             foreach ($listaDenunciasRaw as $d) {
@@ -1078,11 +1211,63 @@ class VehiculoIngresoController extends Controller
                 ];
             }
             $resumenFiscalia = [
+                'ok' => ($fiscPlacaRaw['ok'] ?? false) === true,
                 'tiene_denuncias' => true,
                 'cantidad' => count($listadoDenuncias),
                 'listado' => $listadoDenuncias,
             ];
         }
+
+        // E.2 Denuncias por Cédula del Propietario (Solo cuando figura como SOSPECHOSO o DENUNCIADO)
+        $fiscCedRaw = is_array($paquete['fiscalia_cedula'] ?? null) ? $paquete['fiscalia_cedula'] : [];
+        $listaCedulaRaw = is_array($fiscCedRaw['listado'] ?? null) ? $fiscCedRaw['listado'] : [];
+        $listadoDenunciasCedula = [];
+        $rolesAlertaCedula = ['SOSPECHOSO', 'DENUNCIADO'];
+        $textoFiscaliaCedula = static fn (mixed $valor, string $porDefecto = ''): string => is_scalar($valor)
+            ? trim((string) $valor)
+            : $porDefecto;
+
+        foreach ($listaCedulaRaw as $d) {
+            if (! is_array($d)) {
+                continue;
+            }
+
+            $rol = strtoupper($textoFiscaliaCedula($d['rol'] ?? ''));
+            if (! in_array($rol, $rolesAlertaCedula, true)) {
+                continue;
+            }
+
+            $provincia = $textoFiscaliaCedula($d['provincia'] ?? '');
+            $canton = $textoFiscaliaCedula($d['canton'] ?? '');
+            $listadoDenunciasCedula[] = [
+                'noticia_delito' => $textoFiscaliaCedula($d['ndd'] ?? $d['noticiaDelito'] ?? null, 'S/N'),
+                'fecha' => $textoFiscaliaCedula($d['fecha'] ?? null),
+                'localidad' => trim($provincia.' / '.$canton, ' /'),
+                'descripcion' => $textoFiscaliaCedula($d['delito'] ?? $d['descripcion'] ?? null, 'Investigación fiscal registrada'),
+                'rol' => $rol,
+                'nombre_sujeto' => $textoFiscaliaCedula($d['nombre_sujeto'] ?? null),
+            ];
+        }
+
+        $totalProcesosRaw = $fiscCedRaw['total_procesos_vista'] ?? 0;
+        $totalProcesosVista = is_numeric($totalProcesosRaw) ? max(0, (int) $totalProcesosRaw) : 0;
+        $consultaFiscaliaCedulaExitosa = ($fiscCedRaw['ok'] ?? false) === true;
+        $procesosOtrosRolesRaw = $fiscCedRaw['procesos_otros_roles'] ?? null;
+        $procesosOtrosRoles = $consultaFiscaliaCedulaExitosa
+            ? max(0, is_numeric($procesosOtrosRolesRaw)
+                ? (int) $procesosOtrosRolesRaw
+                : $totalProcesosVista - count($listadoDenunciasCedula))
+            : 0;
+
+        $resumenFiscaliaCedula = [
+            'ok' => $consultaFiscaliaCedulaExitosa,
+            'consultado' => (bool) ($fiscCedRaw['consultado'] ?? false),
+            'cedula' => $textoFiscaliaCedula($fiscCedRaw['cedula'] ?? null, $cedulaDoc ?: 'No detectada'),
+            'tiene_denuncias' => count($listadoDenunciasCedula) > 0,
+            'cantidad' => count($listadoDenunciasCedula),
+            'procesos_otros_roles' => $procesosOtrosRoles,
+            'listado' => $listadoDenunciasCedula,
+        ];
 
         // F. Procesar Cantidad de Transferencias de Dominio (SRI)
         $infoSRI = $paquete['sri'] ?? [];
@@ -1120,6 +1305,7 @@ class VehiculoIngresoController extends Controller
                     'sri' => $resumenSRI,
                     'propietarios' => $resumenPropietarios,
                     'fiscalia' => $resumenFiscalia,
+                    'fiscalia_cedula' => $resumenFiscaliaCedula,
                     'total_deudas' => round($resumenMultas['total'] + $resumenSRI['total'], 2),
                 ],
                 'alertas_criticas' => $alertasCriticas,
@@ -1152,15 +1338,17 @@ class VehiculoIngresoController extends Controller
             'sri' => $resumenSRI,
             'propietarios' => $resumenPropietarios,
             'fiscalia' => $resumenFiscalia,
+            'fiscalia_cedula' => $resumenFiscaliaCedula,
             'total_deudas' => round($resumenMultas['total'] + $resumenSRI['total'], 2),
             'datos_oficiales' => $datosOficiales,
+            'ultima_fecha_revision' => $datosOficiales['ultima_fecha_revision'] ?? '',
             'datos_documento' => $datosMatricula,
             'campos_axis_pendientes' => $camposAxisPendientes,
             'resumen_auditoria' => $validacion->resumen_auditoria,
         ]);
     }
 
-    protected function ejecutarAuditoriaCompleta(string $placa, string $archivoTemp): int
+    protected function ejecutarAuditoriaCompleta(string $placa, string $archivoTemp, string $cedula): int
     {
         $nodeBin = file_exists('C:\laragon\bin\nodejs\node-v22\node.exe')
             ? '"C:\laragon\bin\nodejs\node-v22\node.exe"'
@@ -1172,9 +1360,10 @@ class VehiculoIngresoController extends Controller
             : base_path('consultar_axis.cjs');
 
         $salidaConsola = [];
+        $cedulaArg = escapeshellarg($cedula);
         $codigoSalida = 0;
 
-        exec("{$nodeBin} \"{$scriptPath}\" {$placa} \"{$archivoTemp}\" 2>&1", $salidaConsola, $codigoSalida);
+        exec("{$nodeBin} \"{$scriptPath}\" {$placa} \"{$archivoTemp}\" {$cedulaArg} 2>&1", $salidaConsola, $codigoSalida);
 
         return $codigoSalida;
     }

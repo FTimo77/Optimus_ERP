@@ -2,162 +2,228 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 
-if (process.platform === 'win32') {
-    process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\LENOVO\\.cache\\puppeteer'; //[cite: 4, 5]
+if (!process.env.PUPPETEER_CACHE_DIR && process.platform === 'win32') {
+    process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\LENOVO\\.cache\\puppeteer';
 }
 
 const placa = (process.argv[2] || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const archivoSalida = process.argv[3];
 
 if (!placa) {
+    console.log(JSON.stringify({ status: 'error', message: 'Placa vacía', data: [] }));
     process.exit(1);
 }
 
-// Guardamos el token en caché para que las consultas tarden solo 0.4 segundos durante 30 minutos
 const rutaTokenCache = path.join(__dirname, 'storage', 'app', 'autority_token.txt');
 
-// Token inicial que capturaste
-const TOKEN_INICIAL = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6NjYwNDU4LCJ1c2VyTmFtZSI6IkFub255bW91czIzODUiLCJpYXQiOjE3OTQ2MjA0MTksImV4cCI6MTc5NDYyMjIxOX0.67YrS24vHBSYvodD3nAsuaJoqtHO_-6yshdY3uaWNFI';
+function obtenerRutaNavegadorWindows() {
+    if (process.platform !== 'win32') return undefined;
+    const rutas = [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+    ];
+    for (const r of rutas) {
+        if (fs.existsSync(r)) return r;
+    }
+    return undefined;
+}
 
-// Función que consulta la API directa de Autority con el token
 async function pedirMultasConToken(placaBuscada, token) {
-    const authHeader = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+    if (!token) return null;
+    const limpio = token.replace(/^Bearer\s+/i, '').trim();
     const url = `https://api.autority.io/traffic-ticket/anonymous/PLA/${placaBuscada}`;
 
-    const res = await fetch(url, {
-        method: 'GET',
-        headers: {
-            'Accept': 'application/json, text/plain, */*',
-            'Authorization': authHeader,
-            'Origin': 'https://multas.autority.io',
-            'Referer': 'https://multas.autority.io/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-        },
-        signal: AbortSignal.timeout(12000)
-    });
+    for (const authHeader of [`Bearer ${limpio}`, limpio]) {
+        try {
+            const res = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json, text/plain, */*',
+                    'Authorization': authHeader,
+                    'Origin': 'https://multas.autority.io',
+                    'Referer': `https://multas.autority.io/fines?type=PLA&value=${placaBuscada}&entity=`,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+                },
+                signal: AbortSignal.timeout(10000)
+            });
 
-    const texto = await res.text();
-    if (res.ok && texto.includes('"status":"success"')) {
-        return texto.trim();
+            const texto = await res.text();
+            if (res.ok && texto.includes('"status":"success"')) {
+                return texto.trim();
+            }
+        } catch (e) {}
     }
-
-    // También probamos enviando el token sin la palabra "Bearer " por si el backend lo recibe crudo
-    const resCrudo = await fetch(url, {
-        method: 'GET',
-        headers: {
-            'Accept': 'application/json, text/plain, */*',
-            'Authorization': token.replace(/^Bearer\s+/i, ''),
-            'Origin': 'https://multas.autority.io',
-            'Referer': 'https://multas.autority.io/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-        },
-        signal: AbortSignal.timeout(12000)
-    });
-
-    const textoCrudo = await resCrudo.text();
-    if (resCrudo.ok && textoCrudo.includes('"status":"success"')) {
-        return textoCrudo.trim();
-    }
-
     return null;
 }
 
-// Si el token de 30 minutos caducó, abrimos Puppeteer 1 sola vez para capturar un token Anonymous nuevo
-async function renovarTokenConPuppeteer(placaBuscada) {
+async function renovarTokenYConsultarConPuppeteer(placaBuscada) {
     let browser;
+    const urlsVistas = [];
     try {
-        browser = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
+        const opcionesLaunch = {
+            headless: 'new', // Lo abrimos visible 1 vez para ver si Autority carga o pide algo
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-gpu',
+                '--disable-blink-features=AutomationControlled'
+            ]
+        };
+
+        const exeWin = obtenerRutaNavegadorWindows();
+        if (exeWin) opcionesLaunch.executablePath = exeWin;
+
+        browser = await puppeteer.launch(opcionesLaunch);
+        const page = await browser.newPage();
+
+        // Inyectamos un interceptor directo en el window.fetch y XMLHttpRequest de la página
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            window.__capturaAutority = { token: null, json: null };
+
+            const origFetch = window.fetch;
+            window.fetch = async function (...args) {
+                try {
+                    const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+                    const opts = args[1] || {};
+                    const headers = opts.headers || {};
+                    const auth = headers['Authorization'] || headers['authorization'] || (headers.get && headers.get('Authorization'));
+                    if (auth && String(auth).includes('eyJ')) {
+                        window.__capturaAutority.token = String(auth).replace(/^Bearer\s+/i, '').trim();
+                    }
+                    const response = await origFetch.apply(this, args);
+                    const clone = response.clone();
+                    clone.text().then(txt => {
+                        const m = txt.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+                        if (m && !window.__capturaAutority.token) {
+                            window.__capturaAutority.token = m[0];
+                        }
+                        if (reqUrl.includes('traffic-ticket') && txt.includes('"status":"success"')) {
+                            window.__capturaAutority.json = txt.trim();
+                        }
+                    }).catch(() => {});
+                    return response;
+                } catch (e) {
+                    return origFetch.apply(this, args);
+                }
+            };
+
+            const origOpen = XMLHttpRequest.prototype.open;
+            const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+            XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+                this.__url = url;
+                this.addEventListener('load', function () {
+                    try {
+                        const txt = this.responseText || '';
+                        const m = txt.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+                        if (m && !window.__capturaAutority.token) {
+                            window.__capturaAutority.token = m[0];
+                        }
+                        if ((this.__url || '').includes('traffic-ticket') && txt.includes('"status":"success"')) {
+                            window.__capturaAutority.json = txt.trim();
+                        }
+                    } catch (e) {}
+                });
+                return origOpen.call(this, method, url, ...rest);
+            };
+            XMLHttpRequest.prototype.setRequestHeader = function (header, value) {
+                if (/authorization/i.test(header) && String(value).includes('eyJ')) {
+                    window.__capturaAutority.token = String(value).replace(/^Bearer\s+/i, '').trim();
+                }
+                return origSetHeader.call(this, header, value);
+            };
         });
 
-        const page = await browser.newPage();
         let nuevoToken = null;
+        let jsonDirecto = null;
 
-        // Escuchamos todas las peticiones y respuestas de api.autority.io para atrapar el JWT "eyJ..."
         page.on('request', (req) => {
-            const auth = req.headers()['authorization'];
-            if (auth && auth.includes('eyJ')) {
-                nuevoToken = auth;
+            const url = req.url();
+            if (url.includes('autority.io')) {
+                const auth = req.headers()['authorization'];
+                if (auth && auth.includes('eyJ')) {
+                    nuevoToken = auth.replace(/^Bearer\s+/i, '').trim();
+                }
             }
         });
 
         page.on('response', async (res) => {
-            if (res.url().includes('autority.io') && res.request().method() !== 'OPTIONS') {
-                try {
-                    const txt = await res.text();
-                    const match = txt.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
-                    if (match) {
-                        nuevoToken = match[0];
-                    }
-                } catch (e) {}
+            const url = res.url();
+            if (url.includes('autority.io')) {
+                urlsVistas.push(`${res.status()}:${url.split('?')[0]}`);
+                if (res.request().method() !== 'OPTIONS') {
+                    try {
+                        const txt = await res.text();
+                        const match = txt.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+                        if (match && !nuevoToken) nuevoToken = match[0];
+                        if (url.includes('traffic-ticket') && txt.includes('"status":"success"')) {
+                            jsonDirecto = txt.trim();
+                        }
+                    } catch (e) {}
+                }
             }
         });
 
-        await page.goto('https://multas.autority.io/', {
-            waitUntil: 'networkidle2',
+        const urlFines = `https://multas.autority.io/fines?type=PLA&value=${placaBuscada}&entity=`;
+        await page.goto(urlFines, {
+            waitUntil: 'domcontentloaded',
             timeout: 25000
         });
 
-        // Si el token no salió en las cabeceras de red iniciales, buscamos el JWT dentro de localStorage/sessionStorage/cookies
-        if (!nuevoToken) {
-            nuevoToken = await page.evaluate(() => {
-                const buscarJWT = (storage) => {
-                    for (let i = 0; i < storage.length; i++) {
-                        const val = storage.getItem(storage.key(i)) || '';
-                        const m = val.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
-                        if (m) return m[0];
-                    }
-                    return null;
-                };
-                return buscarJWT(localStorage) || buscarJWT(sessionStorage) || (document.cookie.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/) || [])[0] || null;
-            });
-        }
+        // Esperamos hasta 10 segundos revisando tanto los eventos de red como el interceptor interno
+        for (let i = 0; i < 20; i++) {
+            const interno = await page.evaluate(() => window.__capturaAutority || {}).catch(() => ({}));
+            if (interno.token && !nuevoToken) nuevoToken = interno.token;
+            if (interno.json && !jsonDirecto) jsonDirecto = interno.json;
 
-        // Si aún no genera el token hasta que se hace una consulta en la web, disparamos una consulta rápida
-        if (!nuevoToken) {
-            const input = await page.$('input');
-            if (input) {
-                await input.type(placaBuscada);
-                await page.keyboard.press('Enter');
-                await new Promise(r => setTimeout(r, 2500));
-            }
+            if (jsonDirecto) break;
+            await new Promise(r => setTimeout(r, 500));
         }
 
         if (nuevoToken) {
-            try {
-                fs.writeFileSync(rutaTokenCache, nuevoToken.trim(), 'utf8');
-            } catch (e) {}
+            fs.mkdirSync(path.dirname(rutaTokenCache), { recursive: true });
+            fs.writeFileSync(rutaTokenCache, nuevoToken, 'utf8');
         }
 
-        return nuevoToken;
+        if (jsonDirecto) {
+            return { json: jsonDirecto, debug: 'OK directo' };
+        }
+
+        if (nuevoToken) {
+            const resApi = await pedirMultasConToken(placaBuscada, nuevoToken);
+            if (resApi) return { json: resApi, debug: 'OK con token renovado' };
+        }
+
+        return { json: null, debug: `Token:${nuevoToken ? 'SI' : 'NO'} | URLs:${urlsVistas.slice(0, 6).join(', ')}` };
+    } catch (err) {
+        return { json: null, debug: `Excepcion: ${err.message}` };
     } finally {
-        if (browser) await browser.close();
+        if (browser) {
+            const pages = await browser.pages().catch(() => []);
+            await Promise.all(pages.map(p => p.close().catch(() => {})));
+            await browser.close().catch(() => {});
+        }
     }
 }
 
 (async () => {
     try {
-        // 1. Leemos el token en caché (o usamos el token inicial que capturaste)
-        let tokenActual = TOKEN_INICIAL;
+        let tokenActual = '';
         if (fs.existsSync(rutaTokenCache)) {
-            const guardado = fs.readFileSync(rutaTokenCache, 'utf8').trim();
-            if (guardado) tokenActual = guardado;
+            tokenActual = fs.readFileSync(rutaTokenCache, 'utf8').trim();
         }
 
-        // 2. Intentamos la consulta ultrarrápida (0.4s) con el token actual
         let jsonMultas = await pedirMultasConToken(placa, tokenActual);
 
-        // 3. Si el token ya expiró (pasaron los 30 min), lo renovamos automáticamente con Puppeteer y reintentamos
         if (!jsonMultas) {
-            const tokenFresco = await renovarTokenConPuppeteer(placa);
-            if (tokenFresco) {
-                jsonMultas = await pedirMultasConToken(placa, tokenFresco);
+            const res = await renovarTokenYConsultarConPuppeteer(placa);
+            if (res.json) {
+                jsonMultas = res.json;
+            } else {
+                throw new Error(`No se pudo obtener respuesta de api.autority.io (${res.debug})`);
             }
-        }
-
-        if (!jsonMultas) {
-            throw new Error('No se pudo obtener respuesta de api.autority.io');
         }
 
         if (archivoSalida) {

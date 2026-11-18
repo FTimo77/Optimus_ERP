@@ -33,6 +33,8 @@ const form = useForm({
     id_vehiculo: '',
     validacion_id: null,
     comentario_solicitud: '',
+    ultima_fecha_revision: '',
+    lugar_revision: '',
     documento_matricula: null,
     id_marca: '',
     id_clase: '',
@@ -172,6 +174,8 @@ const seleccionarMatricula = (e) => {
     form.comentario_solicitud = '';
     form.documento_matricula = null;
     form.clearErrors();
+    form.ultima_fecha_revision = '';
+    form.lugar_revision = '';
 };
 
 const escanearYComparar = async () => {
@@ -189,6 +193,8 @@ const escanearYComparar = async () => {
     camposAxisPendientes.value = [];
     form.validacion_id = null;
     form.documento_matricula = null;
+    form.ultima_fecha_revision = '';
+    form.lugar_revision = '';
 
     const formData = new FormData();
     formData.append('documento', archivoMatricula.value);
@@ -217,6 +223,11 @@ const escanearYComparar = async () => {
             for (const { key } of camposAxisFormulario) {
                 form[key] = '';
             }
+            form.ultima_fecha_revision = res.data.ultima_fecha_revision
+                || res.data.datos_oficiales?.ultima_fecha_revision
+                || res.data.datos_oficiales?.fecha_ultima_revision_desde
+                || '';
+            form.lugar_revision = '';
             if (camposAxisPendientes.value.includes('id_vehiculo')) {
                 form.id_vehiculo = res.data.datos_documento?.placa || '';
             }
@@ -767,7 +778,7 @@ const escanearYComparar = async () => {
                                 </p>
                                 <p>
                                     Última revisión en AxisCloud:
-                                    {{ resultadoAuditoria.datos_oficiales.fecha_ultima_revision_desde || 'No disponible' }}
+                                    {{ resultadoAuditoria.ultima_fecha_revision || resultadoAuditoria.datos_oficiales.ultima_fecha_revision || resultadoAuditoria.datos_oficiales.fecha_ultima_revision_desde || 'No disponible' }}
                                     · Vigente hasta:
                                     {{ resultadoAuditoria.datos_oficiales.fecha_ultima_revision_hasta || 'No disponible' }}
                                     · Año:
@@ -842,71 +853,70 @@ const escanearYComparar = async () => {
                                             </div>
                                         </td>
                                     </tr>
+                                    <tr>
+                                        <td class="px-3 py-2 font-semibold">Última Revisión Desde</td>
+                                        <td class="px-3 py-2 font-mono">No extraída de la matrícula</td>
+                                        <td class="px-3 py-2 font-mono">
+                                            {{ resultadoAuditoria.ultima_fecha_revision || resultadoAuditoria.datos_oficiales.ultima_fecha_revision || resultadoAuditoria.datos_oficiales.fecha_ultima_revision_desde || 'No disponible' }}
+                                        </td>
+                                        <td class="px-3 py-2 text-center">
+                                            <span class="rounded-full bg-blue-900 px-2.5 py-0.5 text-[11px] font-bold text-blue-200">
+                                                Dato oficial
+                                            </span>
+                                        </td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
 
                         <!-- TARJETAS FINANCIERAS: MULTAS (AUTORITY) + VALORES DE MATRÍCULA (SRI) -->
                         <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <!-- Tarjeta 1: Multas Autority -->
-                            <div
-                                class="rounded-lg border p-4"
-                                :class="resultadoAuditoria.multas?.tiene_multas
-                                    ? 'border-red-500 bg-red-950/40'
-                                    : 'border-green-600 bg-green-950/30'"
-                            >
-                                <div class="flex items-center justify-between">
-                                    <div>
-                                        <h4
-                                            class="text-xs font-extrabold uppercase tracking-wider"
-                                            :class="resultadoAuditoria.multas?.tiene_multas ? 'text-red-400' : 'text-green-400'"
-                                        >
-                                            {{ resultadoAuditoria.multas?.tiene_multas
+                            <!-- 1. Multas Autority (Con validación si Autority no responde) -->
+                        <div class="rounded-lg border p-4"
+                            :class="!resultadoAuditoria.multas?.ok
+                                ? 'bg-amber-950/40 border-amber-500'
+                                : resultadoAuditoria.multas?.tiene_multas
+                                    ? 'bg-red-950/50 border-red-500'
+                                    : 'bg-green-950/40 border-green-600'">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h5 class="text-xs font-extrabold uppercase tracking-wider"
+                                        :class="!resultadoAuditoria.multas?.ok
+                                            ? 'text-amber-400'
+                                            : resultadoAuditoria.multas?.tiene_multas
+                                                ? 'text-red-400'
+                                                : 'text-green-400'">
+                                        {{ !resultadoAuditoria.multas?.ok
+                                            ? '⚠️ Autority no respondió (Multas no verificadas)'
+                                            : resultadoAuditoria.multas?.tiene_multas
                                                 ? `🚨 ${resultadoAuditoria.multas.cantidad} Multa(s) Pendiente(s)`
                                                 : '✅ Sin Multas de Tránsito (Autority)' }}
-                                        </h4>
-                                        <p class="mt-0.5 text-[11px] text-gray-300">
-                                            Fuente: multas.autority.io
-                                        </p>
-                                    </div>
-                                    <span
-                                        class="font-mono text-lg font-extrabold"
-                                        :class="resultadoAuditoria.multas?.tiene_multas ? 'text-red-400' : 'text-green-400'"
-                                    >
-                                        ${{ Number(resultadoAuditoria.multas?.total || 0).toFixed(2) }}
-                                    </span>
+                                    </h5>
+                                    <p class="text-[11px] text-gray-300 mt-0.5">
+                                        {{ resultadoAuditoria.multas?.mensaje || 'Fuente oficial: Autority' }}
+                                    </p>
                                 </div>
 
-                                <div
-                                    v-if="resultadoAuditoria.multas?.tiene_multas"
-                                    class="mt-3 max-h-44 overflow-y-auto border-t border-red-800/60 pt-2"
-                                >
-                                    <table class="w-full text-left text-[11px] text-gray-200">
-                                        <thead class="text-gray-400 uppercase">
-                                            <tr>
-                                                <th class="py-1 pr-2">Fecha / Entidad</th>
-                                                <th class="py-1 pr-2">Infracción</th>
-                                                <th class="py-1 text-right">Total</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody class="divide-y divide-red-900/40">
-                                            <tr v-for="(multa, idx) in resultadoAuditoria.multas.listado" :key="idx">
-                                                <td class="py-1.5 pr-2 whitespace-nowrap">
-                                                    <div class="font-semibold">{{ multa.fecha }}</div>
-                                                    <div class="text-[10px] text-gray-400">{{ multa.entidad }}</div>
-                                                </td>
-                                                <td class="py-1.5 pr-2">
-                                                    <div class="font-mono text-[10px] text-gray-300">{{ multa.citacion }}</div>
-                                                    <div class="line-clamp-2">{{ multa.descripcion }}</div>
-                                                </td>
-                                                <td class="py-1.5 text-right font-mono font-bold text-red-300 whitespace-nowrap">
-                                                    ${{ Number(multa.total).toFixed(2) }}
-                                                </td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                </div>
+                                <!-- Si no respondió, mostramos "No disponible" en vez de $0.00 -->
+                                <span v-if="!resultadoAuditoria.multas?.ok"
+                                    class="px-2.5 py-1 rounded bg-amber-900/70 text-amber-300 text-xs font-bold uppercase">
+                                    No disponible
+                                </span>
+                                <span v-else
+                                    class="text-lg font-extrabold font-mono"
+                                    :class="resultadoAuditoria.multas?.tiene_multas ? 'text-red-400' : 'text-green-400'">
+                                    ${{ Number(resultadoAuditoria.multas?.total || 0).toFixed(2) }}
+                                </span>
                             </div>
+
+                            <ul v-if="resultadoAuditoria.multas?.ok && resultadoAuditoria.multas?.tiene_multas"
+                                class="mt-3 space-y-1.5 max-h-40 overflow-y-auto text-[11px] border-t border-red-800/60 pt-2">
+                                <li v-for="(m, idx) in resultadoAuditoria.multas.listado" :key="idx" class="flex justify-between gap-2 text-gray-200">
+                                    <span class="truncate">{{ m.fecha }} ({{ m.entidad }}): {{ m.descripcion }}</span>
+                                    <span class="font-bold text-red-300 whitespace-nowrap">${{ Number(m.total).toFixed(2) }}</span>
+                                </li>
+                            </ul>
+                        </div>
 
                             <!-- Tarjeta 2: Valores de Matrícula SRI -->
                             <div
@@ -999,35 +1009,76 @@ const escanearYComparar = async () => {
                             </div>
                         </div>
 
-                        <!-- TARJETA DE ANTECEDENTES JUDICIALES / FISCALÍA -->
-                        <div class="mt-4">
-                            <div
-                                class="rounded-lg border p-4"
-                                :class="resultadoAuditoria.fiscalia?.tiene_denuncias
+                       <!-- 2. Fiscalía por CÉDULA DEL PROPIETARIO (Solo alerta si es SOSPECHOSO / DENUNCIADO) -->
+                        <div
+                            class="rounded-lg border p-4"
+                            :class="!resultadoAuditoria.fiscalia_cedula?.consultado || resultadoAuditoria.fiscalia_cedula?.ok === false
+                                ? 'border-amber-500 bg-amber-950/40'
+                                : resultadoAuditoria.fiscalia_cedula?.tiene_denuncias
                                     ? 'border-red-600 bg-red-950 animate-pulse'
                                     : 'border-green-600 bg-green-950/30'"
-                            >
-                                <div class="flex items-center justify-between">
-                                    <div>
-                                        <h4
-                                            class="text-xs font-extrabold uppercase tracking-wider"
-                                            :class="resultadoAuditoria.fiscalia?.tiene_denuncias ? 'text-red-300 font-black text-sm' : 'text-green-400'"
-                                        >
-                                            {{ resultadoAuditoria.fiscalia?.tiene_denuncias
-                                                ? `🚨 ¡ALERTA CRÍTICA! Vehículo con ${resultadoAuditoria.fiscalia.cantidad} Denuncia(s) en Fiscalía`
-                                                : '✅ Sin Registros de Denuncias o Delitos (Fiscalía FGE)' }}
-                                        </h4>
-                                        <p class="mt-0.5 text-[11px] text-gray-300">
-                                            Fuente: Fiscalía General del Estado (Noticias del Delito)
-                                        </p>
-                                    </div>
-                                    <span
-                                        class="rounded px-2.5 py-1 text-xs font-bold font-mono"
-                                        :class="resultadoAuditoria.fiscalia?.tiene_denuncias ? 'bg-red-600 text-white' : 'bg-green-800 text-green-200'"
+                        >
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h4
+                                        class="text-xs font-extrabold uppercase tracking-wider"
+                                        :class="!resultadoAuditoria.fiscalia_cedula?.consultado || resultadoAuditoria.fiscalia_cedula?.ok === false
+                                            ? 'text-amber-400'
+                                            : resultadoAuditoria.fiscalia_cedula?.tiene_denuncias
+                                                ? 'text-red-300 font-black'
+                                                : 'text-green-400'"
                                     >
-                                        {{ resultadoAuditoria.fiscalia?.tiene_denuncias ? 'BLOQUEAR COMPRA' : 'LIMPIO' }}
-                                    </span>
+                                        {{ !resultadoAuditoria.fiscalia_cedula?.consultado
+                                            ? (resultadoAuditoria.fiscalia_cedula?.cedula && resultadoAuditoria.fiscalia_cedula.cedula !== 'No detectada'
+                                                ? '⚠️ Cédula inválida para consulta'
+                                                : '⚠️ Cédula no detectada en la matrícula')
+                                            : resultadoAuditoria.fiscalia_cedula?.ok === false
+                                                ? '⚠️ Fiscalía no respondió (Cédula no verificada)'
+                                                : resultadoAuditoria.fiscalia_cedula?.tiene_denuncias
+                                                    ? `🚨 ¡ALERTA! Propietario figura como SOSPECHOSO/DENUNCIADO en ${resultadoAuditoria.fiscalia_cedula.cantidad} caso(s)`
+                                                    : '✅ Propietario sin denuncias como Sospechoso o Denunciado' }}
+                                    </h4>
+                                    <p class="mt-0.5 text-[11px] text-gray-300">
+                                        Cédula auditada: <span class="font-mono font-bold text-white">{{ resultadoAuditoria.fiscalia_cedula?.cedula || 'No disponible' }}</span>
+                                        <span v-if="resultadoAuditoria.fiscalia_cedula?.ok && !resultadoAuditoria.fiscalia_cedula?.tiene_denuncias && resultadoAuditoria.fiscalia_cedula?.procesos_otros_roles > 0" class="ml-1 text-gray-400">
+                                            (Aparece en {{ resultadoAuditoria.fiscalia_cedula.procesos_otros_roles }} proceso(s) en otros roles o sin clasificación)
+                                        </span>
+                                    </p>
                                 </div>
+                                <span
+                                    class="rounded px-2.5 py-1 text-xs font-bold font-mono"
+                                    :class="!resultadoAuditoria.fiscalia_cedula?.consultado || resultadoAuditoria.fiscalia_cedula?.ok === false
+                                        ? 'bg-amber-900/70 text-amber-300'
+                                        : resultadoAuditoria.fiscalia_cedula?.tiene_denuncias
+                                            ? 'bg-red-600 text-white'
+                                            : 'bg-green-800 text-green-200'"
+                                >
+                                    {{ !resultadoAuditoria.fiscalia_cedula?.consultado
+                                        ? (resultadoAuditoria.fiscalia_cedula?.cedula && resultadoAuditoria.fiscalia_cedula.cedula !== 'No detectada'
+                                            ? 'CÉDULA INVÁLIDA'
+                                            : 'SIN CÉDULA')
+                                        : resultadoAuditoria.fiscalia_cedula?.ok === false
+                                            ? 'NO DISPONIBLE'
+                                            : resultadoAuditoria.fiscalia_cedula?.tiene_denuncias
+                                                ? 'SOSPECHOSO / DENUNCIADO'
+                                                : 'LIMPIO' }}
+                                </span>
+                            </div>
+
+                            <ul v-if="resultadoAuditoria.fiscalia_cedula?.tiene_denuncias" class="mt-3 space-y-2 border-t border-red-800 pt-2 text-xs text-red-100 max-h-40 overflow-y-auto">
+                                <li v-for="(denuncia, idx) in resultadoAuditoria.fiscalia_cedula.listado" :key="idx" class="rounded bg-red-900/60 p-2">
+                                    <div class="flex justify-between font-bold">
+                                        <span>NDD: {{ denuncia.noticia_delito }} ({{ denuncia.rol }})</span>
+                                        <span>{{ denuncia.fecha }}</span>
+                                    </div>
+                                    <p v-if="denuncia.nombre_sujeto" class="mt-1 text-[11px] text-amber-200">
+                                        Sujeto: {{ denuncia.nombre_sujeto }}
+                                    </p>
+                                    <p class="mt-0.5 text-[11px] text-red-200">Ubicación: {{ denuncia.localidad }}</p>
+                                    <p class="mt-0.5 text-[11px] font-semibold text-white">Delito: {{ denuncia.descripcion }}</p>
+                                </li>
+                            </ul>
+                        </div>
 
                                 <ul v-if="resultadoAuditoria.fiscalia?.tiene_denuncias" class="mt-3 space-y-2 border-t border-red-800 pt-2 text-xs text-red-100">
                                     <li v-for="(denuncia, idx) in resultadoAuditoria.fiscalia.listado" :key="idx" class="rounded bg-red-900/60 p-2">
@@ -1049,10 +1100,10 @@ const escanearYComparar = async () => {
                         >
                             <div>
                                 <h3 class="text-sm font-bold text-emerald-300">
-                                    Completa los datos faltantes para registrar el vehículo
+                                    Completa los datos faltantes para enviar el vehículo a revisión
                                 </h3>
                                 <p class="mt-1 text-xs text-gray-300">
-                                    Los datos oficiales se toman de AxisCloud. Completa solo los datos que no recibió y los datos de adquisición.
+                                    Los datos oficiales se toman de AxisCloud. Completa los campos faltantes y envía la solicitud; el vehículo ingresará al inventario solo si se aprueba.
                                 </p>
                             </div>
 
@@ -1141,6 +1192,59 @@ const escanearYComparar = async () => {
                                 </div>
                             </dl>
 
+                            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div>
+                                    <label for="ultima-fecha-revision" class="block text-sm font-medium text-gray-200">
+                                        Última fecha de revisión
+                                    </label>
+                                    <input
+                                        id="ultima-fecha-revision"
+                                        v-model="form.ultima_fecha_revision"
+                                        type="text"
+                                        maxlength="100"
+                                        placeholder="DD-MM-AAAA HH:MM:SS"
+                                        required
+                                        class="mt-1 block w-full rounded-md border-gray-600 bg-gray-800 text-white shadow-sm"
+                                    />
+                                    <p v-if="form.errors.ultima_fecha_revision" class="mt-1 text-xs text-red-300">
+                                        {{ form.errors.ultima_fecha_revision }}
+                                    </p>
+                                </div>
+                                <div>
+                                    <label for="lugar-revision" class="block text-sm font-medium text-gray-200">
+                                        Lugar de revisión
+                                    </label>
+                                    <input
+                                        id="lugar-revision"
+                                        v-model="form.lugar_revision"
+                                        type="text"
+                                        maxlength="150"
+                                        required
+                                        class="mt-1 block w-full rounded-md border-gray-600 bg-gray-800 text-white shadow-sm"
+                                    />
+                                    <p v-if="form.errors.lugar_revision" class="mt-1 text-xs text-red-300">
+                                        {{ form.errors.lugar_revision }}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label for="comentario-auditoria" class="block text-sm font-medium text-gray-200">
+                                    Comentario para revisión (opcional)
+                                </label>
+                                <textarea
+                                    id="comentario-auditoria"
+                                    v-model="form.comentario_solicitud"
+                                    rows="3"
+                                    maxlength="2000"
+                                    class="mt-1 block w-full rounded-md border-gray-600 bg-gray-800 text-sm text-white shadow-sm"
+                                    placeholder="Agrega información útil para quien revisará la solicitud..."
+                                />
+                                <p v-if="form.errors.comentario_solicitud" class="mt-1 text-xs text-red-300">
+                                    {{ form.errors.comentario_solicitud }}
+                                </p>
+                            </div>
+
                             <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
                                 <div>
                                     <label for="combustible-auditoria" class="block text-sm font-medium text-gray-200">Combustible</label>
@@ -1186,21 +1290,12 @@ const escanearYComparar = async () => {
                                     :disabled="form.processing"
                                     class="rounded-md bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                    {{ form.processing ? 'Registrando vehículo...' : 'Guardar directamente en inventario' }}
+                                    {{ form.processing ? 'Enviando a revisión...' : 'Enviar a revisión manual' }}
                                 </button>
                             </div>
                         </form>
                     </div>
                 </div>
-
-                <div
-                    v-else
-                    class="rounded-lg border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500"
-                >
-                    Seleccione una categoría para mostrar el formulario correspondiente.
-                </div>
-            </div>
-        </div>
     </AuthenticatedLayout>
 </template>
 

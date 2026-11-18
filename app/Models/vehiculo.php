@@ -36,7 +36,19 @@ class Vehiculo extends Model
         'costo_adquisicion',
         'precio_venta',
         'ruta_matricula',
+        'fecha_revision',
+        'lugar_revision',
     ];
+
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'fecha_revision' => 'datetime',
+        ];
+    }
 
     public function marca()
     {

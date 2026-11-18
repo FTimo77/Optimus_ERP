@@ -45,7 +45,13 @@ class ValidacionDocumentosControllerTest extends TestCase
                 'id_vehiculo' => 'PBA1234',
                 'modelo' => 'Corolla',
                 'costo_adquisicion' => 18000,
+                'ultima_fecha_revision' => '20-03-2025 13:52:09',
+                'lugar_revision' => 'Centro de revisión Quito Norte',
                 'imagenes' => [],
+            ],
+            'datos_oficiales' => [
+                'placa' => 'PBA1234',
+                'fecha_ultima_revision_desde' => '20-03-2025 13:52:09',
             ],
         ]);
 
@@ -62,8 +68,45 @@ class ValidacionDocumentosControllerTest extends TestCase
                 ->where('validacion.comentario_solicitud', 'Revisar el costo declarado.')
                 ->where('validacion.puede_reenviar', false)
                 ->where('validacion.datos_ingreso.costo_adquisicion', 18000)
+                ->where('validacion.datos_ingreso.ultima_fecha_revision', '20-03-2025 13:52:09')
+                ->where('validacion.datos_ingreso.lugar_revision', 'Centro de revisión Quito Norte')
+                ->where('validacion.comparacion.1.clave', 'ultima_fecha_revision')
+                ->where('validacion.comparacion.1.estado', 'coincide')
+                ->where('validacion.comparacion.1.documento', '20-03-2025 13:52:09')
+                ->where('validacion.comparacion.1.sistema_web', '20-03-2025 13:52:09')
+                ->where('validacion.comparacion.2.clave', 'lugar_revision')
+                ->where('validacion.comparacion.2.estado', 'informativo')
+                ->where('validacion.comparacion.2.documento', 'Centro de revisión Quito Norte')
                 ->where('validacion.documento_url', route('validacion-documentos.documento', $validacion))
                 ->where('validacion.cuv_url', route('validacion-documentos.cuv', $validacion))
+            );
+    }
+
+    public function test_review_case_marks_user_review_date_different_from_axiscloud(): void
+    {
+        $validacion = $this->createValidacion(User::factory()->create(), [
+            'datos_ingreso' => [
+                'id_vehiculo' => 'PBA1234',
+                'ultima_fecha_revision' => '21-03-2025 13:52:09',
+                'lugar_revision' => 'Centro de revisión Sur',
+            ],
+            'datos_oficiales' => [
+                'placa' => 'PBA1234',
+                'ultima_fecha_revision' => '20-03-2025 13:52:09',
+            ],
+        ]);
+
+        $this->actingAs(User::factory()->create())
+            ->get(route('validacion-documentos.show', $validacion))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('validacion.comparacion.1.clave', 'ultima_fecha_revision')
+                ->where('validacion.comparacion.1.estado', 'diferente')
+                ->where('validacion.comparacion.1.documento', '21-03-2025 13:52:09')
+                ->where('validacion.comparacion.1.sistema_web', '20-03-2025 13:52:09')
+                ->where('validacion.comparacion.2.clave', 'lugar_revision')
+                ->where('validacion.comparacion.2.estado', 'informativo')
+                ->where('validacion.comparacion.2.documento', 'Centro de revisión Sur')
             );
     }
 
