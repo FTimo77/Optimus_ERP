@@ -1,7 +1,8 @@
 <script setup>
+import EscanerAuditoriaMatricula from '@/Components/EscanerAuditoriaMatricula.vue';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head, useForm } from '@inertiajs/vue3';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import axios from 'axios';
 
 // 1. Catálogos iniciales que envía Laravel
@@ -31,6 +32,7 @@ const categoriaSeleccionada = ref('');
 // 4. Formulario conectado con las columnas de tu modelo Vehiculo.php
 const form = useForm({
     id_vehiculo: '',
+    categoria_ingreso: '',
     validacion_id: null,
     comentario_solicitud: '',
     ultima_fecha_revision: '',
@@ -122,34 +124,29 @@ const buscarPorPlaca = async () => {
 
 // 6. Envío del formulario a MySQL
 const enviarFormulario = () => {
+    form.categoria_ingreso = categoriaSeleccionada.value || 'particular';
     form.post(route('vehiculos.store'), {
         onSuccess: () => {
             form.reset();
+            form.categoria_ingreso = categoriaSeleccionada.value;
             if (imagenesInput.value) {
                 imagenesInput.value.value = '';
             }
-            if (matriculaInput.value) {
-                matriculaInput.value.value = '';
+            if (escanerRef.value) {
+                escanerRef.value.reset();
             }
             mensajePlaca.value = '';
-            archivoMatricula.value = null;
-            cedulaPropietarioManual.value = '';
             resultadoAuditoria.value = null;
             camposAxisPendientes.value = [];
             errorAuditoria.value = '';
-            erroresValidacionAuditoria.value = [];
             puedeEnviarRevisionManual.value = false;
         },
     });
 };
 
-const archivoMatricula = ref(null);
-const cedulaPropietarioManual = ref('');
-const matriculaInput = ref(null);
-const escaneandoIA = ref(false);
+const escanerRef = ref(null);
 const resultadoAuditoria = ref(null);
 const errorAuditoria = ref('');
-const erroresValidacionAuditoria = ref([]);
 const puedeEnviarRevisionManual = ref(false);
 const camposAxisPendientes = ref([]);
 const camposAxisFormulario = [
@@ -177,11 +174,20 @@ const mostrarFormularioIngreso = computed(() =>
     || (categoriaSeleccionada.value === 'particular' && Boolean(errorAuditoria.value)),
 );
 
-const seleccionarMatricula = (e) => {
-    archivoMatricula.value = e.target.files[0] || null;
-    cedulaPropietarioManual.value = '';
+watch(categoriaSeleccionada, (nuevaCategoria) => {
+    form.categoria_ingreso = nuevaCategoria;
+    form.validacion_id = null;
+    form.documento_matricula = null;
+    form.clearErrors();
     errorAuditoria.value = '';
-    erroresValidacionAuditoria.value = [];
+    resultadoAuditoria.value = null;
+    puedeEnviarRevisionManual.value = false;
+    camposAxisPendientes.value = [];
+    mensajePlaca.value = '';
+});
+
+const onArchivoMatriculaSeleccionado = () => {
+    errorAuditoria.value = '';
     resultadoAuditoria.value = null;
     puedeEnviarRevisionManual.value = false;
     camposAxisPendientes.value = [];
@@ -193,76 +199,36 @@ const seleccionarMatricula = (e) => {
     form.lugar_revision = '';
 };
 
-const actualizarCedulaPropietario = (event) => {
-    cedulaPropietarioManual.value = event.target.value.replace(/\D/g, '').slice(0, 10);
+const onAuditoriaExitosa = (data) => {
+    errorAuditoria.value = '';
+    resultadoAuditoria.value = data;
+    form.validacion_id = data.validacion_id;
+    const camposDisponibles = new Set(camposAxisFormulario.map(({ key }) => key));
+    camposAxisPendientes.value = Array.isArray(data.campos_axis_pendientes)
+        ? data.campos_axis_pendientes.filter((campo) => camposDisponibles.has(campo))
+        : [];
+    for (const { key } of camposAxisFormulario) {
+        form[key] = '';
+    }
+    form.ultima_fecha_revision = data.ultima_fecha_revision
+        || data.datos_oficiales?.ultima_fecha_revision
+        || data.datos_oficiales?.fecha_ultima_revision_desde
+        || '';
+    form.lugar_revision = '';
+    if (camposAxisPendientes.value.includes('id_vehiculo')) {
+        form.id_vehiculo = data.datos_documento?.placa || '';
+    }
+    puedeEnviarRevisionManual.value = false;
+    form.documento_matricula = null;
 };
 
-const escanearYComparar = async () => {
-    if (!archivoMatricula.value) {
-        errorAuditoria.value = 'Selecciona primero una foto o PDF de la matrícula.';
-        erroresValidacionAuditoria.value = [];
-        return;
-    }
-
-    escaneandoIA.value = true;
-    errorAuditoria.value = '';
-    erroresValidacionAuditoria.value = [];
+const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
+    errorAuditoria.value = message;
     resultadoAuditoria.value = null;
-    puedeEnviarRevisionManual.value = false;
     camposAxisPendientes.value = [];
     form.validacion_id = null;
-    form.documento_matricula = null;
-    form.ultima_fecha_revision = '';
-    form.lugar_revision = '';
-
-    const formData = new FormData();
-    formData.append('documento', archivoMatricula.value);
-    if (cedulaPropietarioManual.value) {
-        formData.append('cedula_propietario', cedulaPropietarioManual.value);
-    }
-
-    const mostrarError = (respuesta, mensajeAlternativo) => {
-        errorAuditoria.value = respuesta?.message || mensajeAlternativo;
-        erroresValidacionAuditoria.value = Object.values(respuesta?.errors || {})
-            .flat()
-            .filter((mensaje) => typeof mensaje === 'string');
-        puedeEnviarRevisionManual.value = respuesta?.manual_review_available === true;
-        form.documento_matricula = puedeEnviarRevisionManual.value ? archivoMatricula.value : null;
-    };
-
-    try {
-        const res = await axios.post(route('vehiculos.escanear.matricula'), formData, {
-            headers: { 'Content-Type': 'multipart/form-data' }
-        });
-
-        if (res.data && res.data.success) {
-            resultadoAuditoria.value = res.data;
-            form.validacion_id = res.data.validacion_id;
-            const camposDisponibles = new Set(camposAxisFormulario.map(({ key }) => key));
-            camposAxisPendientes.value = Array.isArray(res.data.campos_axis_pendientes)
-                ? res.data.campos_axis_pendientes.filter((campo) => camposDisponibles.has(campo))
-                : [];
-            for (const { key } of camposAxisFormulario) {
-                form[key] = '';
-            }
-            form.ultima_fecha_revision = res.data.ultima_fecha_revision
-                || res.data.datos_oficiales?.ultima_fecha_revision
-                || res.data.datos_oficiales?.fecha_ultima_revision_desde
-                || '';
-            form.lugar_revision = '';
-            if (camposAxisPendientes.value.includes('id_vehiculo')) {
-                form.id_vehiculo = res.data.datos_documento?.placa || '';
-            }
-            puedeEnviarRevisionManual.value = false;
-            form.documento_matricula = null;
-        } else {
-            mostrarError(res.data, 'El servidor no devolvió una respuesta válida.');
-        }
-    } catch (error) {
-        mostrarError(error.response?.data, error.message || 'Error al escanear el documento.');
-    } finally {
-        escaneandoIA.value = false;
-    }
+    puedeEnviarRevisionManual.value = manualReviewAvailable;
+    form.documento_matricula = manualReviewAvailable ? file : null;
 };
 </script>
 
@@ -313,194 +279,23 @@ const escanearYComparar = async () => {
                         </svg>
                     </div>
                     <div class="pt-1">
-                        <p class="font-semibold">Vehículo registrado</p>
+                        <p class="font-semibold">Envío confirmado</p>
                         <p class="mt-1 text-sm text-emerald-800">{{ success }}</p>
                     </div>
                 </div>
 
-                <!-- FORMULARIO PRINCIPAL -->
-                <form
-                    v-if="categoriaSeleccionada === 'empresa'"
-                    @submit.prevent="enviarFormulario"
-                    class="bg-white shadow-sm sm:rounded-lg p-6 space-y-6"
-                >
-                    <!-- Alertas de error de validación en Laravel -->
-                    <div v-if="Object.keys(form.errors).length > 0" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4">
-                        <p class="font-bold text-red-700">Por favor corrige los siguientes errores:</p>
-                        <ul class="list-disc list-inside text-sm text-red-600">
-                            <li v-for="(error, campo) in form.errors" :key="campo">{{ error }}</li>
-                        </ul>
-                    </div>
-
-                    <!-- SECCIÓN 1: Identificación de serie -->
-                    <div>
-                        <h3 class="text-lg font-bold text-gray-800 border-b pb-2 mb-4">1. Identificación Técnica</h3>
-                        <div class="mb-4">
-                            <label for="imagenes" class="block text-sm font-medium text-gray-700">
-                                Imágenes del vehículo (opcional, máximo 10)
-                            </label>
-                            <div class="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-                                <input
-                                    id="imagenes"
-                                    ref="imagenesInput"
-                                    type="file"
-                                    accept="image/jpeg,image/png,image/webp"
-                                    multiple
-                                    aria-describedby="imagenes-ayuda"
-                                    class="peer sr-only"
-                                    @input="form.imagenes = Array.from($event.target.files ?? [])"
-                                />
-                                <label
-                                    for="imagenes"
-                                    class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2.5 text-sm font-bold text-gray-900 shadow-sm transition hover:bg-yellow-400 peer-focus-visible:ring-2 peer-focus-visible:ring-yellow-500 peer-focus-visible:ring-offset-2"
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        class="h-5 w-5"
-                                        fill="none"
-                                        viewBox="0 0 24 24"
-                                        stroke="currentColor"
-                                        stroke-width="1.8"
-                                        aria-hidden="true"
-                                    >
-                                        <rect x="3" y="3" width="18" height="18" rx="2" />
-                                        <circle cx="8.5" cy="8.5" r="1.5" />
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="m21 15-5-5L5 21" />
-                                    </svg>
-                                    Añadir imágenes
-                                </label>
-                                <p id="imagenes-ayuda" class="text-xs text-gray-500">
-                                    JPG, PNG o WebP; máximo 5 MB por imagen.
-                                </p>
-                            </div>
-                            <p v-if="form.imagenes.length" class="mt-1 text-xs text-gray-600">
-                                {{ form.imagenes.length }} imagen(es) seleccionada(s).
-                            </p>
-                            <p v-if="form.errors.imagenes" class="mt-1 text-sm text-red-600">
-                                {{ form.errors.imagenes }}
-                            </p>
-                            <p
-                                v-for="(error, index) in erroresImagenes"
-                                :key="index"
-                                class="mt-1 text-sm text-red-600"
-                            >
-                                {{ error }}
-                            </p>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Fecha de Revisión</label>
-                                <input v-model="form.fecha_revision" type="date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Lugar Revision</label>
-                                <input v-model="form.motor" type="text" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm uppercase font-mono" required />
-                            </div>
-                        </div>    
-                    </div>
-                            
-
-                    <!-- SECCIÓN 3: Negociación y Ubicación -->
-                    <div>
-                        <h3 class="text-lg font-bold text-gray-800 border-b pb-2 mb-4">3. Datos de Compra y Recepción</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Costo Adquisición ($)</label>
-                                <input v-model="form.costo_adquisicion" type="number" step="0.01" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-                        </div>
-                    </div>
-                </form>
-
-                <!-- MÓDULO DE ESCANEO IA Y AUDITORÍA CRUZADA (4 FUENTES) -->
-                <div
+                <!-- MÓDULO DE ESCANEO IA Y AUDITORÍA CRUZADA (SOLO PARTICULAR) -->
+                <EscanerAuditoriaMatricula
                     v-if="categoriaSeleccionada === 'particular'"
-                    class="mb-6 rounded-lg border border-slate-700 bg-slate-900 p-5 text-white shadow-md"
+                    ref="escanerRef"
+                    :endpoint-url="route('vehiculos.escanear.matricula')"
+                    input-id-prefix="ingreso-matricula"
+                    class="mb-6"
+                    @file-selected="onArchivoMatriculaSeleccionado"
+                    @success="onAuditoriaExitosa"
+                    @error="onAuditoriaError"
                 >
-                    <div class="flex flex-col items-center justify-between gap-4 md:flex-row">
-                        <div>
-                            <h3 class="text-sm font-extrabold uppercase tracking-wider text-yellow-400">
-                                Escáner IA de Matrícula + Auditoría Oficial (AxisCloud · SRI · Autority · Propietario)
-                            </h3>
-                            <p class="mt-1 text-xs text-gray-300">
-                                Sube la foto o PDF de la matrícula para extraer sus datos con IA y validarlos contra las fuentes oficiales en tiempo real.
-                            </p>
-                            <p class="mt-1 text-xs text-gray-400">
-                                El documento se enviará a Google Gemini y se consultarán simultáneamente Propietario, Multas, Valores SRI y Ficha Técnica.
-                            </p>
-                        </div>
-
-                        <div class="flex w-full flex-col gap-3 md:w-auto md:flex-row md:items-end">
-                            <div class="w-full md:w-48">
-                                <label for="cedula-propietario-auditoria" class="mb-1 block text-xs font-semibold text-gray-200">
-                                    Cédula del propietario (opcional)
-                                </label>
-                                <input
-                                    id="cedula-propietario-auditoria"
-                                    v-model="cedulaPropietarioManual"
-                                    @input="actualizarCedulaPropietario"
-                                    :disabled="escaneandoIA"
-                                    type="text"
-                                    inputmode="numeric"
-                                    maxlength="10"
-                                    autocomplete="off"
-                                    placeholder="10 dígitos"
-                                    class="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-xs text-white placeholder:text-gray-400 focus:border-yellow-400 focus:outline-none"
-                                />
-                                <p class="mt-1 text-[10px] text-gray-400">
-                                    Se usa si la IA no la detecta.
-                                </p>
-                            </div>
-                            <div>
-                                <label for="documento-matricula" class="mb-1 block text-xs font-semibold text-gray-200">
-                                    Matrícula
-                                </label>
-                                <input
-                                    id="documento-matricula"
-                                    ref="matriculaInput"
-                                    type="file"
-                                    @change="seleccionarMatricula"
-                                    :disabled="escaneandoIA"
-                                    accept="image/jpeg,image/png,image/webp,.pdf"
-                                    aria-label="Seleccionar matrícula en PDF o imagen"
-                                    class="text-xs text-gray-300 file:mr-3 file:rounded file:border-0 file:bg-gray-700 file:px-3 file:py-1.5 file:text-white hover:file:bg-gray-600"
-                                />
-                            </div>
-                            <button
-                                type="button"
-                                @click="escanearYComparar"
-                                :disabled="escaneandoIA"
-                                class="whitespace-nowrap rounded bg-yellow-500 px-4 py-2 text-xs font-bold text-black shadow hover:bg-yellow-600 disabled:opacity-50"
-                            >
-                                {{ escaneandoIA ? 'Auditando IA + 4 Fuentes Web...' : 'Auditar Matrícula' }}
-                            </button>
-                        </div>
-                    </div>
-
-                    <div
-                        v-if="escaneandoIA"
-                        role="progressbar"
-                        aria-label="Auditando matrícula"
-                        class="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-700"
-                    >
-                        <div class="loading-bar__indicator h-full w-1/3 rounded-full bg-yellow-400"></div>
-                    </div>
-
-                    <div
-                        v-if="errorAuditoria"
-                        role="alert"
-                        aria-live="assertive"
-                        class="mt-3 rounded border border-red-500 bg-red-900/50 p-3 text-xs text-red-200"
-                    >
-                        <p>{{ errorAuditoria }}</p>
-                        <ul
-                            v-if="erroresValidacionAuditoria.length"
-                            class="mt-2 list-inside list-disc space-y-1"
-                        >
-                            <li v-for="(error, index) in erroresValidacionAuditoria" :key="index">
-                                {{ error }}
-                            </li>
-                        </ul>
+                    <template #error-extra>
                         <div
                             v-if="puedeEnviarRevisionManual"
                             class="mt-3 rounded border border-amber-400 bg-amber-950/50 p-3"
@@ -536,250 +331,7 @@ const escanearYComparar = async () => {
                                 </button>
                             </div>
                         </div>
-                        </div>
-                        <form
-                    v-if="mostrarFormularioIngreso"
-                    @submit.prevent="enviarFormulario"
-                    class="bg-white shadow-sm sm:rounded-lg p-6 space-y-6"
-                >
-                    <!-- Alertas de error de validación en Laravel -->
-                    <div v-if="Object.keys(form.errors).length > 0" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4">
-                        <p class="font-bold text-red-700">Por favor corrige los siguientes errores:</p>
-                        <ul class="list-disc list-inside text-sm text-red-600">
-                            <li v-for="(error, campo) in form.errors" :key="campo">{{ error }}</li>
-                        </ul>
-                    </div>
-                    <!-- BARRA DE AUTOCOMPLETADO POR PLACA (LIMPIA PARA EL USUARIO) -->
-                <div
-                    v-if="mostrarFormularioIngreso"
-                    class="bg-gray-900 text-white p-5 rounded-lg shadow-md mb-6"
-                >
-                    <div class="flex flex-col md:flex-row items-center justify-between gap-4">
-                        <div>
-                            <h3 class="text-sm font-extrabold text-yellow-400 uppercase tracking-wider">
-                                Autocompletar Datos por Placa
-                            </h3>
-                            <p class="text-xs text-gray-300 mt-0.5">
-                                Ingresa la placa del vehículo para rellenar Chasis, Motor, Marca, Modelo, Año y País automáticamente.
-                            </p>
-                        </div>
-
-                        <div class="flex items-center gap-2 w-full md:w-auto">
-                            <input
-                                v-model="form.id_vehiculo"
-                                @keyup.enter="buscarPorPlaca"
-                                type="text"
-                                placeholder="Placa (ej. PFI0582)"
-                                :disabled="cargandoPlaca"
-                                aria-label="Placa del vehículo"
-                                class="w-full md:w-48 rounded-md border-gray-600 bg-gray-800 text-white uppercase font-mono px-3 py-2 text-sm focus:ring-yellow-500 focus:border-yellow-500"
-                            />
-                            <button
-                                type="button"
-                                @click="buscarPorPlaca"
-                                :disabled="cargandoPlaca"
-                                class="px-5 py-2 bg-yellow-500 hover:bg-yellow-600 text-black font-bold text-sm rounded-md shadow disabled:opacity-50 transition whitespace-nowrap"
-                            >
-                                {{ cargandoPlaca ? 'Buscando datos...' : 'Buscar Placa' }}
-                            </button>
-                        </div>
-                    </div>
-
-                    <div
-                        v-if="cargandoPlaca"
-                        role="progressbar"
-                        aria-label="Buscando información de la placa"
-                        class="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-700"
-                    >
-                        <div class="loading-bar__indicator h-full w-1/3 rounded-full bg-yellow-400"></div>
-                    </div>
-
-                    <!-- Mensaje de estado de la búsqueda -->
-                    <div v-if="mensajePlaca" class="mt-3 pt-3 border-t border-gray-700 text-xs font-semibold" :class="tipoMensaje === 'exito' ? 'text-green-400' : 'text-amber-400'">
-                        {{ mensajePlaca }}
-                    </div>
-                </div>    
-                    <!-- SECCIÓN 1: Identificación de serie -->
-                    <div>
-                        <h3 class="text-lg font-bold text-gray-800 border-b pb-2 mb-4">1. Identificación Técnica</h3>
-                        <div class="mb-4">
-                            <label for="imagenes" class="block text-sm font-medium text-gray-700">
-                                Imágenes del vehículo (opcional, máximo 10)
-                            </label>
-                            <div class="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-                                <input
-                                    id="imagenes"
-                                    ref="imagenesInput"
-                                    type="file"
-                                    accept="image/jpeg,image/png,image/webp"
-                                    multiple
-                                    aria-describedby="imagenes-ayuda"
-                                    class="peer sr-only"
-                                    @input="form.imagenes = Array.from($event.target.files ?? [])"
-                                />
-                                <label
-                                    for="imagenes"
-                                    class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2.5 text-sm font-bold text-gray-900 shadow-sm transition hover:bg-yellow-400 peer-focus-visible:ring-2 peer-focus-visible:ring-yellow-500 peer-focus-visible:ring-offset-2"
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        class="h-5 w-5"
-                                        fill="none"
-                                        viewBox="0 0 24 24"
-                                        stroke="currentColor"
-                                        stroke-width="1.8"
-                                        aria-hidden="true"
-                                    >
-                                        <rect x="3" y="3" width="18" height="18" rx="2" />
-                                        <circle cx="8.5" cy="8.5" r="1.5" />
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="m21 15-5-5L5 21" />
-                                    </svg>
-                                    Añadir imágenes
-                                </label>
-                                <p id="imagenes-ayuda" class="text-xs text-gray-500">
-                                    JPG, PNG o WebP; máximo 5 MB por imagen.
-                                </p>
-                            </div>
-                            <p v-if="form.imagenes.length" class="mt-1 text-xs text-gray-600">
-                                {{ form.imagenes.length }} imagen(es) seleccionada(s).
-                            </p>
-                            <p v-if="form.errors.imagenes" class="mt-1 text-sm text-red-600">
-                                {{ form.errors.imagenes }}
-                            </p>
-                            <p
-                                v-for="(error, index) in erroresImagenes"
-                                :key="index"
-                                class="mt-1 text-sm text-red-600"
-                            >
-                                {{ error }}
-                            </p>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Chasis (VIN)</label>
-                                <input v-model="form.chasis" type="text" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm uppercase font-mono" required />
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Número de Motor</label>
-                                <input v-model="form.motor" type="text" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm uppercase font-mono" required />
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Cilindraje (cc)</label>
-                                <input v-model="form.cilindraje" type="text" placeholder="Ej: 1600" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- SECCIÓN 2: Catálogos y Características -->
-                    <div>
-                        <h3 class="text-lg font-bold text-gray-800 border-b pb-2 mb-4">2. Características del Vehículo</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Marca</label>
-                                <select v-model="form.id_marca" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in listaMarcas" :key="item.id_marca" :value="item.id_marca">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Modelo</label>
-                                <input v-model="form.modelo" type="text" placeholder="Ej: Hilux / Gol" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Tipo de Vehículo</label>
-                                <input v-model="form.tipo_vehiculo" type="text" placeholder="Ej: SEDAN / COUPE" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm uppercase" />
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Tipo de Servicio</label>
-                                <input v-model="form.servicio" type="text" placeholder="Ej: USO PARTICULAR" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm uppercase" />
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Clase</label>
-                                <select v-model="form.id_clase" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in listaClases" :key="item.id_clase" :value="item.id_clase">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Año</label>
-                                <input v-model="form.anio" type="number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Color</label>
-                                <select v-model="form.id_color" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in listaColores" :key="item.id_color" :value="item.id_color">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">País de Origen</label>
-                                <select v-model="form.id_pais" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in listaPaises" :key="item.id_pais" :value="item.id_pais">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Combustible</label>
-                                <select v-model="form.id_tipo_combustible" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in combustibles" :key="item.id_tipo_combustible" :value="item.id_tipo_combustible">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Transmisión</label>
-                                <select v-model="form.id_transmision" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
-                                    <option value="" disabled>Seleccione...</option>
-                                    <option v-for="item in transmisiones" :key="item.id_transmision" :value="item.id_transmision">
-                                        {{ item.nombre }}
-                                    </option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- SECCIÓN 3: Negociación y Ubicación -->
-                    <div>
-                        <h3 class="text-lg font-bold text-gray-800 border-b pb-2 mb-4">3. Datos de Compra y Recepción</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Costo Adquisición ($)</label>
-                                <input v-model="form.costo_adquisicion" type="number" step="0.01" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
-                            </div>
-                        </div>
-                    </div>
-                    <div class="flex justify-end">
-                        <button
-                            type="submit"
-                            :disabled="form.processing"
-                            class="rounded-md bg-indigo-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            {{ form.processing
-                                ? 'Enviando...'
-                                : form.documento_matricula
-                                    ? 'Enviar a revisión manual'
-                                    : 'Registrar vehículo manualmente' }}
-                        </button>
-                    </div>
-                </form>
+                    </template>
 
                     <div
                         v-if="resultadoAuditoria"
@@ -1362,7 +914,6 @@ const escanearYComparar = async () => {
                                     </li>
                                 </ul>
                             </div>
-                        </div>
 
                         <form
                             v-if="categoriaSeleccionada === 'particular' && resultadoAuditoria"
@@ -1565,8 +1116,266 @@ const escanearYComparar = async () => {
                                 </button>
                             </div>
                         </form>
+                </EscanerAuditoriaMatricula>
+
+                <!-- FORMULARIO MANUAL CON AUTOCOMPLETADO POR PLACA (EMPRESA O FALLBACK DE GEMINI) -->
+                <form
+                    v-if="mostrarFormularioIngreso"
+                    @submit.prevent="enviarFormulario"
+                    class="space-y-6 bg-white p-6 shadow-sm sm:rounded-lg"
+                >
+                    <div v-if="categoriaSeleccionada === 'empresa'" class="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900">
+                        <strong>Ingreso categoría Empresa:</strong> Al guardar, el vehículo se enviará directamente a revisión manual, donde podrás escanear y comparar la matrícula.
                     </div>
-                </div>
+
+                    <!-- Alertas de error de validación en Laravel -->
+                    <div v-if="Object.keys(form.errors).length > 0" class="mb-4 border-l-4 border-red-500 bg-red-50 p-4">
+                        <p class="font-bold text-red-700">Por favor corrige los siguientes errores:</p>
+                        <ul class="list-inside list-disc text-sm text-red-600">
+                            <li v-for="(error, campo) in form.errors" :key="campo">{{ error }}</li>
+                        </ul>
+                    </div>
+
+                    <!-- BARRA DE AUTOCOMPLETADO POR PLACA -->
+                    <div class="mb-6 rounded-lg bg-gray-900 p-5 text-white shadow-md">
+                        <div class="flex flex-col items-center justify-between gap-4 md:flex-row">
+                            <div>
+                                <h3 class="text-sm font-extrabold uppercase tracking-wider text-yellow-400">
+                                    Autocompletar Datos por Placa
+                                </h3>
+                                <p class="mt-0.5 text-xs text-gray-300">
+                                    Ingresa la placa del vehículo para rellenar Chasis, Motor, Marca, Modelo, Año y País automáticamente.
+                                </p>
+                            </div>
+
+                            <div class="flex w-full items-center gap-2 md:w-auto">
+                                <input
+                                    v-model="form.id_vehiculo"
+                                    @keyup.enter="buscarPorPlaca"
+                                    type="text"
+                                    placeholder="Placa (ej. PFI0582)"
+                                    :disabled="cargandoPlaca"
+                                    aria-label="Placa del vehículo"
+                                    required
+                                    class="w-full rounded-md border-gray-600 bg-gray-800 px-3 py-2 font-mono text-sm uppercase text-white focus:border-yellow-500 focus:ring-yellow-500 md:w-48"
+                                />
+                                <button
+                                    type="button"
+                                    @click="buscarPorPlaca"
+                                    :disabled="cargandoPlaca"
+                                    class="whitespace-nowrap rounded-md bg-yellow-500 px-5 py-2 text-sm font-bold text-black shadow transition hover:bg-yellow-600 disabled:opacity-50"
+                                >
+                                    {{ cargandoPlaca ? 'Buscando datos...' : 'Buscar Placa' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div
+                            v-if="cargandoPlaca"
+                            role="progressbar"
+                            aria-label="Buscando información de la placa"
+                            class="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-700"
+                        >
+                            <div class="loading-bar__indicator h-full w-1/3 rounded-full bg-yellow-400" />
+                        </div>
+
+                        <div
+                            v-if="mensajePlaca"
+                            class="mt-3 border-t border-gray-700 pt-3 text-xs font-semibold"
+                            :class="tipoMensaje === 'exito' ? 'text-green-400' : 'text-amber-400'"
+                        >
+                            {{ mensajePlaca }}
+                        </div>
+                    </div>
+
+                    <!-- SECCIÓN 1: Identificación de serie -->
+                    <div>
+                        <h3 class="mb-4 border-b pb-2 text-lg font-bold text-gray-800">1. Identificación Técnica</h3>
+                        <div class="mb-4">
+                            <label for="imagenes" class="block text-sm font-medium text-gray-700">
+                                Imágenes del vehículo (opcional, máximo 10)
+                            </label>
+                            <div class="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
+                                <input
+                                    id="imagenes"
+                                    ref="imagenesInput"
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    multiple
+                                    aria-describedby="imagenes-ayuda"
+                                    class="peer sr-only"
+                                    @input="form.imagenes = Array.from($event.target.files ?? [])"
+                                />
+                                <label
+                                    for="imagenes"
+                                    class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2.5 text-sm font-bold text-gray-900 shadow-sm transition hover:bg-yellow-400 peer-focus-visible:ring-2 peer-focus-visible:ring-yellow-500 peer-focus-visible:ring-offset-2"
+                                >
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        class="h-5 w-5"
+                                        fill="none"
+                                        viewBox="0 0 24 24"
+                                        stroke="currentColor"
+                                        stroke-width="1.8"
+                                        aria-hidden="true"
+                                    >
+                                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                                        <circle cx="8.5" cy="8.5" r="1.5" />
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="m21 15-5-5L5 21" />
+                                    </svg>
+                                    Añadir imágenes
+                                </label>
+                                <p id="imagenes-ayuda" class="text-xs text-gray-500">
+                                    JPG, PNG o WebP; máximo 5 MB por imagen.
+                                </p>
+                            </div>
+                            <p v-if="form.imagenes.length" class="mt-1 text-xs text-gray-600">
+                                {{ form.imagenes.length }} imagen(es) seleccionada(s).
+                            </p>
+                            <p v-if="form.errors.imagenes" class="mt-1 text-sm text-red-600">
+                                {{ form.errors.imagenes }}
+                            </p>
+                            <p
+                                v-for="(error, index) in erroresImagenes"
+                                :key="index"
+                                class="mt-1 text-sm text-red-600"
+                            >
+                                {{ error }}
+                            </p>
+                        </div>
+                        <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Chasis (VIN)</label>
+                                <input v-model="form.chasis" type="text" class="mt-1 block w-full rounded-md border-gray-300 font-mono uppercase shadow-sm" required />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Número de Motor</label>
+                                <input v-model="form.motor" type="text" class="mt-1 block w-full rounded-md border-gray-300 font-mono uppercase shadow-sm" required />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Cilindraje (cc)</label>
+                                <input v-model="form.cilindraje" type="text" placeholder="Ej: 1600" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECCIÓN 2: Catálogos y Características -->
+                    <div>
+                        <h3 class="mb-4 border-b pb-2 text-lg font-bold text-gray-800">2. Características del Vehículo</h3>
+                        <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Marca</label>
+                                <select v-model="form.id_marca" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
+                                    <option value="" disabled>Seleccione...</option>
+                                    <option v-for="item in listaMarcas" :key="item.id_marca" :value="item.id_marca">
+                                        {{ item.nombre }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Modelo</label>
+                                <input v-model="form.modelo" type="text" placeholder="Ej: Hilux / Gol" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Tipo de Vehículo</label>
+                                <input v-model="form.tipo_vehiculo" type="text" placeholder="Ej: SEDAN / COUPE" class="mt-1 block w-full rounded-md border-gray-300 uppercase shadow-sm" />
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Tipo de Servicio</label>
+                                <input v-model="form.servicio" type="text" placeholder="Ej: USO PARTICULAR" class="mt-1 block w-full rounded-md border-gray-300 uppercase shadow-sm" />
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Clase</label>
+                                <select v-model="form.id_clase" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
+                                    <option value="" disabled>Seleccione...</option>
+                                    <option v-for="item in listaClases" :key="item.id_clase" :value="item.id_clase">
+                                        {{ item.nombre }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Año</label>
+                                <input v-model="form.anio" type="number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Color</label>
+                                <select v-model="form.id_color" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
+                                    <option value="" disabled>Seleccione...</option>
+                                    <option v-for="item in listaColores" :key="item.id_color" :value="item.id_color">
+                                        {{ item.nombre }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">País de Origen</label>
+                                <select v-model="form.id_pais" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
+                                    <option value="" disabled>Seleccione...</option>
+                                    <option v-for="item in listaPaises" :key="item.id_pais" :value="item.id_pais">
+                                        {{ item.nombre }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Combustible</label>
+                                <select v-model="form.id_tipo_combustible" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
+                                    <option value="" disabled>Seleccione...</option>
+                                    <option v-for="item in combustibles" :key="item.id_tipo_combustible" :value="item.id_tipo_combustible">
+                                        {{ item.nombre }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Transmisión</label>
+                                <select v-model="form.id_transmision" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required>
+                                    <option value="" disabled>Seleccione...</option>
+                                    <option v-for="item in transmisiones" :key="item.id_transmision" :value="item.id_transmision">
+                                        {{ item.nombre }}
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECCIÓN 3: Negociación y Ubicación -->
+                    <div>
+                        <h3 class="mb-4 border-b pb-2 text-lg font-bold text-gray-800">3. Datos de Compra y Recepción</h3>
+                        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Costo Adquisición ($)</label>
+                                <input v-model="form.costo_adquisicion" type="number" step="0.01" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" required />
+                            </div>
+                            <div v-if="categoriaSeleccionada === 'empresa'">
+                                <label class="block text-sm font-medium text-gray-700">Comentario para revisión (opcional)</label>
+                                <input v-model="form.comentario_solicitud" type="text" maxlength="2000" placeholder="Observaciones para quien revisa..." class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end">
+                        <button
+                            type="submit"
+                            :disabled="form.processing"
+                            class="rounded-md bg-indigo-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {{ form.processing
+                                ? 'Enviando...'
+                                : (categoriaSeleccionada === 'empresa' || form.documento_matricula)
+                                    ? 'Enviar a revisión manual'
+                                    : 'Registrar vehículo manualmente' }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
     </AuthenticatedLayout>
 </template>
 

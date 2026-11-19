@@ -1,7 +1,8 @@
 <script setup>
+import EscanerAuditoriaMatricula from '@/Components/EscanerAuditoriaMatricula.vue';
 import Modal from '@/Components/Modal.vue';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head, Link, useForm } from '@inertiajs/vue3';
+import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import axios from 'axios';
 import { computed, reactive, ref } from 'vue';
 
@@ -37,6 +38,7 @@ const errorCedula = ref('');
 const generandoConstancia = ref(false);
 const errorConstancia = ref('');
 const mensajeConstancia = ref('');
+const mensajeAuditoriaEmpresa = ref('');
 const datosCedula = reactive({
     nombre_completo: props.validacion.datos_cedula_cliente?.nombre_completo || '',
     cedula: props.validacion.datos_cedula_cliente?.cedula || '',
@@ -262,6 +264,14 @@ const escanearCedulaConGemini = async () => {
     }
 };
 
+const onAuditoriaEmpresaExitosa = () => {
+    mensajeAuditoriaEmpresa.value = 'Matrícula escaneada y comparada correctamente. Los datos del expediente fueron actualizados.';
+    router.reload({
+        only: ['validacion'],
+        preserveScroll: true,
+    });
+};
+
 const generarYDescargarConstancia = async () => {
     generandoConstancia.value = true;
     errorConstancia.value = '';
@@ -320,9 +330,19 @@ const generarYDescargarConstancia = async () => {
                         Revisión de matrícula: {{ validacion.placa }}
                     </h2>
                 </div>
-                <span :class="estadoClases(estadoVisual)" class="w-fit rounded-full px-3 py-1 text-sm font-semibold">
-                    {{ estadoTexto(estadoVisual) }}
-                </span>
+                <div class="flex flex-wrap items-center gap-2">
+                    <span
+                        class="w-fit rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide"
+                        :class="validacion.categoria_ingreso === 'empresa'
+                            ? 'bg-slate-800 text-yellow-400'
+                            : 'bg-gray-100 text-gray-700'"
+                    >
+                        {{ validacion.categoria_ingreso === 'empresa' ? 'Empresa' : 'Particular' }}
+                    </span>
+                    <span :class="estadoClases(estadoVisual)" class="w-fit rounded-full px-3 py-1 text-sm font-semibold">
+                        {{ estadoTexto(estadoVisual) }}
+                    </span>
+                </div>
             </div>
         </template>
 
@@ -334,6 +354,19 @@ const generarYDescargarConstancia = async () => {
                 <div v-if="mensajeConstancia" role="status" class="rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800">
                     {{ mensajeConstancia }}
                 </div>
+                <div v-if="mensajeAuditoriaEmpresa" role="status" class="rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+                    {{ mensajeAuditoriaEmpresa }}
+                </div>
+
+                <!-- MÓDULO DE ESCANEO Y COMPARACIÓN DE MATRÍCULA (SOLO CATEGORÍA EMPRESA) -->
+                <EscanerAuditoriaMatricula
+                    v-if="validacion.categoria_ingreso === 'empresa' && validacion.estado_revision === 'pendiente'"
+                    :endpoint-url="route('validacion-documentos.escanear.matricula', validacion.id)"
+                    input-id-prefix="show-empresa-matricula"
+                    titulo="Escáner IA de Matrícula + Auditoría Oficial (Categoría Empresa)"
+                    subtitulo="Sube la matrícula de este vehículo de Empresa para extraer sus datos con Gemini y compararlos contra AxisCloud, SRI, Autority, Fiscalía, SUPA y SATJE."
+                    @success="onAuditoriaEmpresaExitosa"
+                />
 
                 <section
                     v-if="estadoVisual === 'pendiente_constancia'"
@@ -373,6 +406,7 @@ const generarYDescargarConstancia = async () => {
                     </div>
                     <div class="flex flex-wrap items-end gap-2">
                         <a
+                            v-if="validacion.documento_url"
                             :href="validacion.documento_url"
                             class="inline-flex rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-700"
                         >
@@ -430,17 +464,28 @@ const generarYDescargarConstancia = async () => {
                                 <tr>
                                     <td class="px-5 py-3 font-medium text-gray-900">Matrícula vehicular</td>
                                     <td class="px-5 py-3">
-                                        <span class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800">
+                                        <span
+                                            v-if="validacion.documento_url"
+                                            class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800"
+                                        >
                                             Cargada
+                                        </span>
+                                        <span
+                                            v-else
+                                            class="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800"
+                                        >
+                                            Pendiente de escaneo
                                         </span>
                                     </td>
                                     <td class="px-5 py-3">
                                         <a
+                                            v-if="validacion.documento_url"
                                             :href="validacion.documento_url"
                                             class="text-xs font-semibold text-indigo-700 hover:text-indigo-900"
                                         >
                                             Descargar matrícula
                                         </a>
+                                        <span v-else class="text-xs text-gray-500">Escanea la matrícula arriba</span>
                                     </td>
                                 </tr>
                                 <tr>

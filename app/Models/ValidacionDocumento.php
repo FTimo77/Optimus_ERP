@@ -9,6 +9,7 @@ class ValidacionDocumento extends Model
 {
     protected $fillable = [
         'placa',
+        'categoria_ingreso',
         'ruta_documento',
         'ruta_cuv',
         'ruta_comprobante_pago',

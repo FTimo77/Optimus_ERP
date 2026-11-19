@@ -77,6 +77,7 @@ const fechaTexto = (fecha) => fecha
                                 <tr>
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Placa</th>
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Vehículo</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Categoría</th>
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Alertas críticas</th>
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Estado</th>
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Subido por</th>
@@ -91,6 +92,16 @@ const fechaTexto = (fecha) => fecha
                                     </td>
                                     <td class="px-5 py-4 text-sm text-gray-700">
                                         {{ validacion.marca }} {{ validacion.modelo }}
+                                    </td>
+                                    <td class="whitespace-nowrap px-5 py-4">
+                                        <span
+                                            class="rounded-full px-2.5 py-1 text-xs font-semibold"
+                                            :class="validacion.categoria_ingreso === 'empresa'
+                                                ? 'bg-slate-800 text-yellow-400'
+                                                : 'bg-gray-100 text-gray-700'"
+                                        >
+                                            {{ validacion.categoria_ingreso === 'empresa' ? 'Empresa' : 'Particular' }}
+                                        </span>
                                     </td>
                                     <td class="px-5 py-4 text-sm">
                                         <span :class="validacion.alertas_criticas > 0 ? 'font-semibold text-red-700' : 'text-gray-600'">

@@ -59,6 +59,7 @@ class VehiculoIngresoService
 
         $validated = $request->validate([
             'id_vehiculo' => ['required', 'string', 'max:20', 'unique:vehiculos,id_vehiculo'],
+            'categoria_ingreso' => ['nullable', 'string', 'in:particular,empresa'],
             'validacion_id' => ['nullable', 'integer', 'exists:validacion_documentos,id'],
             'comentario_solicitud' => ['nullable', 'string', 'max:2000'],
             'ultima_fecha_revision' => [
@@ -95,13 +96,24 @@ class VehiculoIngresoService
             'precio_venta' => ['nullable', 'numeric', 'min:0', 'gte:costo_adquisicion'],
         ]);
 
+        $categoriaIngreso = $validated['categoria_ingreso'] ?? 'particular';
         $comentarioSolicitud = trim($validated['comentario_solicitud'] ?? '');
         $documentoMatricula = $validated['documento_matricula'] ?? null;
         unset(
+            $validated['categoria_ingreso'],
             $validated['validacion_id'],
             $validated['comentario_solicitud'],
             $validated['documento_matricula'],
         );
+
+        if ($validacionAuditoria === null && $categoriaIngreso === 'empresa') {
+            return $this->enviarEmpresaARevision(
+                $request,
+                $validated,
+                $documentoMatricula instanceof UploadedFile ? $documentoMatricula : null,
+                $comentarioSolicitud,
+            );
+        }
 
         if ($validacionAuditoria === null && $documentoMatricula instanceof UploadedFile) {
             return $this->enviarDocumentoSinAuditoriaARevision(
@@ -382,7 +394,7 @@ class VehiculoIngresoService
             throw $exception;
         }
 
-        return to_route('validacion-documentos.show', $validacion)
+        return to_route('vehiculos.create')
             ->with('success', 'Auditoría enviada a revisión manual. El vehículo se incorporará al inventario solo si se aprueba.');
     }
 
@@ -470,7 +482,142 @@ class VehiculoIngresoService
             throw $exception;
         }
 
-        return to_route('validacion-documentos.show', $validacion)
+        return to_route('vehiculos.create')
             ->with('success', 'Documento enviado a revisión manual sin auditoría automática.');
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function enviarEmpresaARevision(
+        Request $request,
+        array $validated,
+        ?UploadedFile $documentoMatricula,
+        string $comentarioSolicitud,
+    ): RedirectResponse {
+        $placa = strtoupper(preg_replace('/[^A-Z0-9]/', '', $validated['id_vehiculo']) ?? '');
+
+        if (! preg_match('/^[A-Z0-9]{6,10}$/D', $placa)) {
+            throw ValidationException::withMessages([
+                'id_vehiculo' => 'Ingresa una placa válida para enviar el vehículo a revisión manual.',
+            ]);
+        }
+
+        if (Vehiculo::query()->whereKey($placa)->exists()) {
+            throw ValidationException::withMessages([
+                'id_vehiculo' => 'La placa ya existe en el inventario.',
+            ]);
+        }
+
+        $existePendiente = ValidacionDocumento::query()
+            ->where('placa', $placa)
+            ->whereIn('estado_revision', ['borrador', 'pendiente', 'pendiente_comprobante', 'rechazada'])
+            ->exists();
+
+        if ($existePendiente) {
+            throw ValidationException::withMessages([
+                'id_vehiculo' => 'Esta placa ya tiene un expediente en revisión.',
+            ]);
+        }
+
+        $rutaDocumento = null;
+        $mimeType = null;
+        $rutasArchivosTemporales = [];
+
+        if ($documentoMatricula !== null) {
+            $rutaGuardada = $documentoMatricula->store('validacion-documentos', 'local');
+            if (! is_string($rutaGuardada)) {
+                throw ValidationException::withMessages([
+                    'documento_matricula' => 'No se pudo guardar la matrícula para revisión manual. Inténtalo nuevamente.',
+                ]);
+            }
+
+            $rutaDocumento = $rutaGuardada;
+            $mimeType = $documentoMatricula->getMimeType() ?? 'application/octet-stream';
+            $rutasArchivosTemporales[] = $rutaGuardada;
+        }
+
+        $imagenes = $validated['imagenes'] ?? [];
+        unset($validated['imagenes']);
+        $validated['id_vehiculo'] = $placa;
+
+        try {
+            $validacion = DB::transaction(function () use (
+                $request,
+                $placa,
+                $rutaDocumento,
+                $mimeType,
+                $validated,
+                $imagenes,
+                $comentarioSolicitud,
+                &$rutasArchivosTemporales,
+            ): ValidacionDocumento {
+                $nombreMarca = isset($validated['id_marca'])
+                    ? DB::table('marca_vehiculos')->where('id_marca', $validated['id_marca'])->value('nombre')
+                    : null;
+
+                $validacion = ValidacionDocumento::create([
+                    'placa' => $placa,
+                    'categoria_ingreso' => 'empresa',
+                    'ruta_documento' => $rutaDocumento,
+                    'mime_type' => $mimeType,
+                    'datos_documento' => array_filter([
+                        'placa' => $placa,
+                        'marca' => is_string($nombreMarca) && trim($nombreMarca) !== '' ? trim($nombreMarca) : null,
+                        'modelo' => isset($validated['modelo']) && trim((string) $validated['modelo']) !== '' ? trim((string) $validated['modelo']) : null,
+                    ], static fn (mixed $v): bool => $v !== null),
+                    'datos_oficiales' => [],
+                    'comparacion' => [[
+                        'campo' => 'Auditoría de matrícula (Empresa)',
+                        'clave' => 'ocr',
+                        'documento' => 'Pendiente de escaneo',
+                        'sistema_web' => 'Pendiente de consulta',
+                        'coincide' => false,
+                        'estado' => 'no_verificable',
+                        'nota' => 'Vehículo ingresado bajo categoría Empresa. Escanea y compara la matrícula desde este expediente.',
+                        'critico' => false,
+                    ]],
+                    'alertas_criticas' => 0,
+                    'estado_revision' => 'pendiente',
+                    'subido_por' => $request->user()->id,
+                    'datos_ingreso' => [...$validated, 'imagenes' => []],
+                    'comentario_solicitud' => $comentarioSolicitud === '' ? null : $comentarioSolicitud,
+                ]);
+
+                $rutasImagenesTemporales = [];
+                foreach ($imagenes as $imagen) {
+                    $rutaImagen = $imagen->store("validacion-documentos/{$validacion->id}/imagenes", 'local');
+
+                    if (! is_string($rutaImagen)) {
+                        throw ValidationException::withMessages([
+                            'imagenes' => 'No se pudo guardar una imagen del vehículo para revisión manual.',
+                        ]);
+                    }
+
+                    $rutasImagenesTemporales[] = $rutaImagen;
+                    $rutasArchivosTemporales[] = $rutaImagen;
+                }
+
+                if ($rutasImagenesTemporales !== []) {
+                    $validacion->update([
+                        'datos_ingreso' => [...$validated, 'imagenes' => $rutasImagenesTemporales],
+                    ]);
+                }
+
+                return $validacion;
+            });
+        } catch (Throwable $exception) {
+            if ($rutasArchivosTemporales !== [] && ! Storage::disk('local')->delete($rutasArchivosTemporales)) {
+                Log::warning('Could not remove temporary files after a failed company vehicle submission.', [
+                    'plate' => $placa,
+                    'file_paths' => $rutasArchivosTemporales,
+                ]);
+            }
+
+            throw $exception;
+        }
+
+        return to_route('vehiculos.create')
+            ->with('success', 'Vehículo de categoría Empresa enviado a revisión manual.');
     }
 }

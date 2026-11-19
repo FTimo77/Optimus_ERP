@@ -9,6 +9,7 @@ use App\Models\Servicio;
 use App\Models\TipoVehiculo;
 use App\Models\ValidacionDocumento;
 use App\Models\vehiculo as Vehiculo;
+use App\Services\VehiculoIngreso\AuditoriaVehicularService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\JsonResponse;
@@ -34,22 +35,35 @@ class ValidacionDocumentosController extends Controller
 {
     public function index(): Response
     {
+        $marcasPorId = DB::table('marca_vehiculos')->pluck('nombre', 'id_marca');
+
         $validaciones = ValidacionDocumento::query()
             ->where('estado_revision', '!=', 'borrador')
             ->with('subidor:id,name')
             ->latest()
             ->paginate(15)
-            ->through(fn (ValidacionDocumento $validacion): array => [
-                'id' => $validacion->id,
-                'placa' => $validacion->placa,
-                'marca' => $validacion->datos_documento['marca'] ?? 'No detectada',
-                'modelo' => $validacion->datos_documento['modelo'] ?? 'No detectado',
-                'estado_revision' => $validacion->estado_revision,
-                'tiene_contrato' => $validacion->ruta_contrato_generado !== null,
-                'alertas_criticas' => $validacion->alertas_criticas,
-                'subido_por' => $validacion->subidor?->name ?? 'Usuario eliminado',
-                'created_at' => $validacion->created_at?->toIso8601String(),
-            ]);
+            ->through(function (ValidacionDocumento $validacion) use ($marcasPorId): array {
+                $datosIngreso = is_array($validacion->datos_ingreso) ? $validacion->datos_ingreso : [];
+                $marcaIngreso = isset($datosIngreso['id_marca'])
+                    ? ($marcasPorId[$datosIngreso['id_marca']] ?? null)
+                    : null;
+                $modeloIngreso = isset($datosIngreso['modelo']) && trim((string) $datosIngreso['modelo']) !== ''
+                    ? trim((string) $datosIngreso['modelo'])
+                    : null;
+
+                return [
+                    'id' => $validacion->id,
+                    'placa' => $validacion->placa,
+                    'categoria_ingreso' => $validacion->categoria_ingreso ?? 'particular',
+                    'marca' => $validacion->datos_documento['marca'] ?? $marcaIngreso ?? 'No detectada',
+                    'modelo' => $validacion->datos_documento['modelo'] ?? $modeloIngreso ?? 'No detectado',
+                    'estado_revision' => $validacion->estado_revision,
+                    'tiene_contrato' => $validacion->ruta_contrato_generado !== null,
+                    'alertas_criticas' => $validacion->alertas_criticas,
+                    'subido_por' => $validacion->subidor?->name ?? 'Usuario eliminado',
+                    'created_at' => $validacion->created_at?->toIso8601String(),
+                ];
+            });
 
         return Inertia::render('ValidacionDocumentos/Index', [
             'validaciones' => $validaciones,
@@ -161,7 +175,10 @@ class ValidacionDocumentosController extends Controller
                 'comentario_revision' => $validacion->comentario_revision,
                 'puede_reenviar' => $validacion->estado_revision === 'rechazada'
                     && $validacion->subido_por === $request->user()->id,
-                'documento_url' => route('validacion-documentos.documento', $validacion),
+                'documento_url' => $validacion->ruta_documento === null
+                    ? null
+                    : route('validacion-documentos.documento', $validacion),
+                'categoria_ingreso' => $validacion->categoria_ingreso ?? 'particular',
                 'cuv_url' => $validacion->ruta_cuv === null
                     ? null
                     : route('validacion-documentos.cuv', $validacion),
@@ -190,6 +207,7 @@ class ValidacionDocumentosController extends Controller
     public function documento(ValidacionDocumento $validacion): StreamedResponse
     {
         abort_unless($validacion->estado_revision !== 'borrador', 404);
+        abort_unless($validacion->ruta_documento !== null, 404);
 
         $disk = Storage::disk('local');
 
@@ -201,10 +219,61 @@ class ValidacionDocumentosController extends Controller
             $validacion->ruta_documento,
             "matricula_{$validacion->placa}.{$extension}",
             [
-                'Content-Type' => $validacion->mime_type,
+                'Content-Type' => $validacion->mime_type ?? 'application/octet-stream',
                 'X-Content-Type-Options' => 'nosniff',
             ],
         );
+    }
+
+    public function escanearMatricula(Request $request, ValidacionDocumento $validacion): JsonResponse
+    {
+        set_time_limit(180);
+
+        abort_unless(
+            ($validacion->categoria_ingreso ?? 'particular') === 'empresa',
+            403,
+            'El escaneo de matrícula desde revisión solo está habilitado para vehículos de categoría Empresa.',
+        );
+
+        abort_unless(
+            $validacion->estado_revision === 'pendiente',
+            409,
+            'Solo se puede auditar la matrícula mientras el expediente está pendiente de revisión.',
+        );
+
+        $request->validate([
+            'documento' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+        ]);
+
+        return app(AuditoriaVehicularService::class)->escanearYComparar(
+            $request,
+            $request->file('documento'),
+            fn (string $placa, string $archivoTemp, string $cedula): int => $this->ejecutarAuditoriaCompleta(
+                $placa,
+                $archivoTemp,
+                $cedula,
+            ),
+            $validacion,
+        );
+    }
+
+    protected function ejecutarAuditoriaCompleta(string $placa, string $archivoTemp, string $cedula): int
+    {
+        $nodeBin = file_exists('C:\laragon\bin\nodejs\node-v22\node.exe')
+            ? '"C:\laragon\bin\nodejs\node-v22\node.exe"'
+            : 'node';
+
+        $scriptPath = file_exists(base_path('auditoria_completa.cjs'))
+            ? base_path('auditoria_completa.cjs')
+            : base_path('consultar_axis.cjs');
+
+        $salidaConsola = [];
+        $cedulaArg = escapeshellarg($cedula);
+        $codigoSalida = 0;
+
+        exec("{$nodeBin} \"{$scriptPath}\" {$placa} \"{$archivoTemp}\" {$cedulaArg} 2>&1", $salidaConsola, $codigoSalida);
+
+        return $codigoSalida;
     }
 
     public function cuv(ValidacionDocumento $validacion): StreamedResponse

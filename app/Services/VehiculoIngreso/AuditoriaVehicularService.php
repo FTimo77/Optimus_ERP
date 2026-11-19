@@ -27,6 +27,7 @@ class AuditoriaVehicularService
         Request $request,
         UploadedFile $archivo,
         Closure $ejecutarAuditoriaCompleta,
+        ?ValidacionDocumento $validacionExistente = null,
     ): JsonResponse {
         $resultadoOcr = $this->geminiOcrService->extraerDatosMatricula($archivo);
 
@@ -131,31 +132,61 @@ class AuditoriaVehicularService
             ], 500);
         }
 
+        $resumenAuditoria = [
+            'multas' => $resumenMultas,
+            'amt' => $resumenAmt,
+            'cte' => $resumenCte,
+            'atm' => $resumenAtm,
+            'sri' => $resumenSRI,
+            'propietarios' => $resumenPropietarios,
+            'fiscalia' => $resumenFiscalia,
+            'fiscalia_cedula' => $resumenFiscaliaCedula,
+            'supa' => $resumenSupa,
+            'satje' => $resumenSatje,
+            'total_deudas' => round(($resumenMultas['total'] ?? 0) + ($resumenSRI['total'] ?? 0), 2),
+        ];
+
         try {
-            $validacion = ValidacionDocumento::create([
-                'placa' => $placa,
-                'ruta_documento' => $rutaDocumento,
-                'mime_type' => $archivo->getMimeType() ?? 'application/octet-stream',
-                'datos_documento' => $datosMatricula,
-                'datos_oficiales' => $datosOficiales,
-                'comparacion' => $comparacion,
-                'resumen_auditoria' => [
-                    'multas' => $resumenMultas,
-                    'amt' => $resumenAmt,
-                    'cte' => $resumenCte,
-                    'atm' => $resumenAtm,
-                    'sri' => $resumenSRI,
-                    'propietarios' => $resumenPropietarios,
-                    'fiscalia' => $resumenFiscalia,
-                    'fiscalia_cedula' => $resumenFiscaliaCedula,
-                    'supa' => $resumenSupa,
-                    'satje' => $resumenSatje,
-                    'total_deudas' => round(($resumenMultas['total'] ?? 0) + ($resumenSRI['total'] ?? 0), 2),
-                ],
-                'alertas_criticas' => $alertasCriticas,
-                'estado_revision' => 'borrador',
-                'subido_por' => $request->user()->id,
-            ]);
+            if ($validacionExistente !== null) {
+                $rutaAnterior = $validacionExistente->ruta_documento;
+                $resumenAnterior = is_array($validacionExistente->resumen_auditoria)
+                    ? $validacionExistente->resumen_auditoria
+                    : [];
+
+                if (isset($resumenAnterior['cuv'])) {
+                    $resumenAuditoria['cuv'] = $resumenAnterior['cuv'];
+                }
+
+                $validacionExistente->update([
+                    'ruta_documento' => $rutaDocumento,
+                    'mime_type' => $archivo->getMimeType() ?? 'application/octet-stream',
+                    'datos_documento' => $datosMatricula,
+                    'datos_oficiales' => $datosOficiales,
+                    'comparacion' => $comparacion,
+                    'resumen_auditoria' => $resumenAuditoria,
+                    'alertas_criticas' => $alertasCriticas,
+                ]);
+
+                if ($rutaAnterior !== null && $rutaAnterior !== $rutaDocumento) {
+                    Storage::disk('local')->delete($rutaAnterior);
+                }
+
+                $validacion = $validacionExistente->fresh();
+            } else {
+                $validacion = ValidacionDocumento::create([
+                    'placa' => $placa,
+                    'categoria_ingreso' => 'particular',
+                    'ruta_documento' => $rutaDocumento,
+                    'mime_type' => $archivo->getMimeType() ?? 'application/octet-stream',
+                    'datos_documento' => $datosMatricula,
+                    'datos_oficiales' => $datosOficiales,
+                    'comparacion' => $comparacion,
+                    'resumen_auditoria' => $resumenAuditoria,
+                    'alertas_criticas' => $alertasCriticas,
+                    'estado_revision' => 'borrador',
+                    'subido_por' => $request->user()->id,
+                ]);
+            }
         } catch (Throwable $exception) {
             if (! Storage::disk('local')->delete($rutaDocumento)) {
                 Log::warning('Registration document could not be removed after draft creation failed.', [
