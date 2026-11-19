@@ -25,6 +25,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
+use PhpOffice\PhpWord\TemplateProcessor;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
@@ -44,6 +45,7 @@ class ValidacionDocumentosController extends Controller
                 'marca' => $validacion->datos_documento['marca'] ?? 'No detectada',
                 'modelo' => $validacion->datos_documento['modelo'] ?? 'No detectado',
                 'estado_revision' => $validacion->estado_revision,
+                'tiene_contrato' => $validacion->ruta_contrato_generado !== null,
                 'alertas_criticas' => $validacion->alertas_criticas,
                 'subido_por' => $validacion->subidor?->name ?? 'Usuario eliminado',
                 'created_at' => $validacion->created_at?->toIso8601String(),
@@ -163,6 +165,19 @@ class ValidacionDocumentosController extends Controller
                 'cuv_url' => $validacion->ruta_cuv === null
                     ? null
                     : route('validacion-documentos.cuv', $validacion),
+                'comprobante_url' => $validacion->ruta_comprobante_pago === null
+                    ? null
+                    : route('validacion-documentos.comprobante', $validacion),
+                'ruta_cedula_cliente' => $validacion->ruta_cedula_cliente,
+                'datos_cedula_cliente' => $validacion->datos_cedula_cliente,
+                'ruta_contrato_generado' => $validacion->ruta_contrato_generado,
+                'cedula_url' => $validacion->ruta_cedula_cliente === null
+                    ? null
+                    : route('validacion-documentos.cedula', $validacion),
+                'contrato_url' => $validacion->ruta_contrato_generado === null
+                    ? null
+                    : route('validacion-documentos.contrato', $validacion),
+                'vehiculo_contrato' => $this->resolverDatosVehiculoContrato($validacion, $datosIngresoParaVista),
                 'subido_por' => $validacion->subidor?->name ?? 'Usuario eliminado',
                 'revisado_por' => $validacion->revisor?->name,
                 'created_at' => $validacion->created_at?->toIso8601String(),
@@ -896,14 +911,15 @@ class ValidacionDocumentosController extends Controller
                 }
 
                 if ($validated['decision'] === 'aprobada') {
-                    $rutasImagenesTemporales = $this->crearVehiculoDesdeExpediente(
-                        $validacionBloqueada,
-                        $rutasImagenesPublicas,
-                    );
+                    $this->validarDatosIngresoDesdeExpediente($validacionBloqueada);
                 }
 
+                $nuevoEstado = $validated['decision'] === 'aprobada'
+                    ? 'pendiente_comprobante'
+                    : 'rechazada';
+
                 $validacionBloqueada->update([
-                    'estado_revision' => $validated['decision'],
+                    'estado_revision' => $nuevoEstado,
                     'comentario_revision' => $comentario === '' ? null : $comentario,
                     'revisado_por' => $request->user()->id,
                     'revisado_en' => now(),
@@ -947,10 +963,652 @@ class ValidacionDocumentosController extends Controller
         }
 
         $mensaje = $validated['decision'] === 'aprobada'
-            ? 'Documento aprobado y vehículo incorporado al inventario.'
+            ? 'Documento aprobado. Queda pendiente subir el comprobante de pago para ingresar el vehículo al inventario.'
             : 'Documento rechazado.';
 
         return to_route('validacion-documentos.show', $validacion)->with('success', $mensaje);
+    }
+
+    public function comprobante(ValidacionDocumento $validacion): StreamedResponse
+    {
+        abort_unless(
+            $validacion->ruta_comprobante_pago !== null
+                && Storage::disk('local')->exists($validacion->ruta_comprobante_pago),
+            404,
+        );
+
+        $extension = pathinfo($validacion->ruta_comprobante_pago, PATHINFO_EXTENSION);
+        $nombreDescarga = $extension !== ''
+            ? "comprobante-{$validacion->placa}.{$extension}"
+            : "comprobante-{$validacion->placa}";
+
+        return Storage::disk('local')->download(
+            $validacion->ruta_comprobante_pago,
+            $nombreDescarga,
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
+    }
+
+    public function subirComprobante(Request $request, ValidacionDocumento $validacion): RedirectResponse
+    {
+        $request->validate([
+            'documento_comprobante' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+        ]);
+
+        $rutaComprobante = $request->file('documento_comprobante')->store(
+            "validacion-documentos/{$validacion->id}/comprobante",
+            'local',
+        );
+
+        if ($rutaComprobante === false) {
+            throw new RuntimeException('No se pudo almacenar el comprobante de pago.');
+        }
+
+        $rutaComprobanteAnterior = null;
+        $rutasImagenesPublicas = [];
+        $rutasImagenesTemporales = [];
+
+        try {
+            DB::transaction(function () use (
+                $validacion,
+                $rutaComprobante,
+                &$rutaComprobanteAnterior,
+                &$rutasImagenesPublicas,
+                &$rutasImagenesTemporales,
+            ): void {
+                $validacionBloqueada = ValidacionDocumento::query()
+                    ->whereKey($validacion->getKey())
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                abort_unless(
+                    $validacionBloqueada->estado_revision === 'pendiente_comprobante',
+                    409,
+                    'Este expediente no está pendiente de comprobante de pago.',
+                );
+
+                $rutaComprobanteAnterior = $validacionBloqueada->ruta_comprobante_pago;
+
+                $validacionBloqueada->update([
+                    'ruta_comprobante_pago' => $rutaComprobante,
+                ]);
+
+                $rutasImagenesTemporales = $this->crearVehiculoDesdeExpediente(
+                    $validacionBloqueada,
+                    $rutasImagenesPublicas,
+                );
+
+                $validacionBloqueada->update([
+                    'estado_revision' => 'aprobada',
+                ]);
+            });
+        } catch (Throwable $exception) {
+            if ($rutasImagenesPublicas !== []
+                && ! Storage::disk('public')->delete($rutasImagenesPublicas)) {
+                Log::error('Could not remove vehicle images after a failed payment receipt upload.', [
+                    'validacion_id' => $validacion->id,
+                    'image_paths' => $rutasImagenesPublicas,
+                ]);
+            }
+
+            if (! Storage::disk('local')->delete($rutaComprobante)) {
+                Log::warning('A newly uploaded payment receipt could not be removed after a failed upload.', [
+                    'validacion_id' => $validacion->id,
+                    'file_path' => $rutaComprobante,
+                ]);
+            }
+
+            throw $exception;
+        }
+
+        if ($rutaComprobanteAnterior !== null
+            && $rutaComprobanteAnterior !== $rutaComprobante
+            && ! Storage::disk('local')->delete($rutaComprobanteAnterior)) {
+            Log::warning('A replaced payment receipt could not be removed from temporary storage.', [
+                'validacion_id' => $validacion->id,
+                'file_path' => $rutaComprobanteAnterior,
+            ]);
+        }
+
+        if ($rutasImagenesTemporales !== []
+            && ! Storage::disk('local')->delete($rutasImagenesTemporales)) {
+            Log::warning('Approved vehicle images could not be removed from temporary storage.', [
+                'validacion_id' => $validacion->id,
+                'image_paths' => $rutasImagenesTemporales,
+            ]);
+        }
+
+        return back()->with(
+            'success',
+            "Comprobante de pago registrado y vehículo {$validacion->placa} incorporado al inventario. Ahora puedes generar la constancia.",
+        );
+    }
+
+    public function escanearCedula(Request $request, ValidacionDocumento $validacion): JsonResponse
+    {
+        $request->validate([
+            'documento_cedula' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+        ]);
+
+        $archivo = $request->file('documento_cedula');
+        $mimeType = $archivo->getMimeType() ?: 'image/jpeg';
+        $archivoBytes = file_get_contents($archivo->getRealPath());
+
+        if ($archivoBytes === false) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo leer el archivo de la cédula cargado.',
+            ], 422);
+        }
+
+        $apiKey = config('services.gemini.api_key');
+        if (! is_string($apiKey) || trim($apiKey) === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gemini no está configurado. Define GEMINI_API_KEY en .env y limpia la caché de configuración.',
+            ], 503);
+        }
+
+        $rutaAnterior = $validacion->ruta_cedula_cliente;
+        $rutaCedula = $archivo->store('documentos/cedulas', 'public');
+
+        if ($rutaCedula === false) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo almacenar la cédula escaneada.',
+            ], 500);
+        }
+
+        $base64Data = null;
+        if (str_starts_with($mimeType, 'image/') && function_exists('imagecreatefromstring')) {
+            $imgRaw = @imagecreatefromstring($archivoBytes);
+            if ($imgRaw !== false) {
+                $ancho = imagesx($imgRaw);
+                $alto = imagesy($imgRaw);
+                if ($ancho > 1800) {
+                    $nuevoAncho = 1800;
+                    $nuevoAlto = (int) floor(($alto / $ancho) * $nuevoAncho);
+                    $imgResized = imagecreatetruecolor($nuevoAncho, $nuevoAlto);
+                    imagecopyresampled($imgResized, $imgRaw, 0, 0, 0, 0, $nuevoAncho, $nuevoAlto, $ancho, $alto);
+                    imagedestroy($imgRaw);
+                    $imgRaw = $imgResized;
+                }
+
+                ob_start();
+                imagejpeg($imgRaw, null, 92);
+                $jpegNitido = ob_get_clean();
+                imagedestroy($imgRaw);
+
+                if ($jpegNitido) {
+                    $base64Data = base64_encode($jpegNitido);
+                    $mimeType = 'image/jpeg';
+                }
+            }
+        }
+
+        if ($base64Data === null) {
+            $base64Data = base64_encode($archivoBytes);
+        }
+
+        $prompt = 'Analiza esta cédula de identidad de Ecuador (anverso y/o reverso). '
+            .'Extrae únicamente los datos visibles del titular; no inventes ni deduzcas información que no aparezca. '
+            .'Devuelve únicamente un objeto JSON válido con estas claves exactas: '
+            .'{"nombre_completo": "", "cedula": "", "estado_civil": "", "es_casado": false, "nombre_conyuge": ""}. '
+            .'En "nombre_completo" coloca nombres y apellidos completos en mayúsculas tal como figuran en la cédula. '
+            .'En "cedula" coloca el número de cédula de 10 dígitos sin espacios ni guiones. '
+            .'En "estado_civil" coloca el estado civil exacto (ej. SOLTERO, CASADO, DIVORCIADO, VIUDO, UNIÓN DE HECHO). '
+            .'Pon "es_casado" en true únicamente si el estado civil es CASADO o UNIÓN DE HECHO (en caso contrario false). '
+            .'En "nombre_conyuge" coloca el nombre completo del cónyuge si aparece visible en la cédula; si no aparece o no aplica, devuelve cadena vacía.';
+
+        $payload = [
+            'contents' => [
+                [
+                    'parts' => [
+                        ['text' => $prompt],
+                        [
+                            'inline_data' => [
+                                'mime_type' => $mimeType,
+                                'data' => $base64Data,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'generationConfig' => [
+                'responseMimeType' => 'application/json',
+                'temperature' => 0.0,
+            ],
+        ];
+
+        try {
+            $respuestaGemini = $this->ejecutarEscaneoGemini($apiKey, $payload);
+        } catch (Throwable $exception) {
+            Storage::disk('public')->delete($rutaCedula);
+            Log::warning('Error al escanear cédula con escanear_gemini.cjs.', [
+                'validacion_id' => $validacion->id,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo completar el escaneo de la cédula con Gemini: '.$exception->getMessage(),
+            ], 502);
+        }
+
+        if (isset($respuestaGemini['error']['message'])) {
+            Storage::disk('public')->delete($rutaCedula);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gemini devolvió un error al escanear la cédula: '.$respuestaGemini['error']['message'],
+            ], 502);
+        }
+
+        $textoJson = $respuestaGemini['candidates'][0]['content']['parts'][0]['text'] ?? null;
+        if (! is_string($textoJson) || trim($textoJson) === '') {
+            Storage::disk('public')->delete($rutaCedula);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gemini no devolvió datos legibles de la cédula. Intenta con una foto más nítida.',
+            ], 422);
+        }
+
+        $textoLimpio = preg_replace('/^```(?:json)?\s*|\s*```$/i', '', trim($textoJson)) ?? trim($textoJson);
+        $datosExtraidos = json_decode($textoLimpio, true);
+
+        if (! is_array($datosExtraidos)) {
+            Storage::disk('public')->delete($rutaCedula);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'La respuesta de Gemini no tiene un formato JSON válido.',
+            ], 422);
+        }
+
+        $estadoCivil = strtoupper(trim((string) ($datosExtraidos['estado_civil'] ?? '')));
+        $esCasado = filter_var($datosExtraidos['es_casado'] ?? false, FILTER_VALIDATE_BOOLEAN)
+            || str_contains($estadoCivil, 'CASAD')
+            || str_contains($estadoCivil, 'UNION');
+
+        $datosCedula = [
+            'nombre_completo' => strtoupper(trim((string) ($datosExtraidos['nombre_completo'] ?? ''))),
+            'cedula' => preg_replace('/[^0-9]/', '', (string) ($datosExtraidos['cedula'] ?? '')) ?? '',
+            'estado_civil' => $estadoCivil,
+            'es_casado' => $esCasado,
+            'nombre_conyuge' => $esCasado ? strtoupper(trim((string) ($datosExtraidos['nombre_conyuge'] ?? ''))) : '',
+            'cedula_conyuge' => '',
+        ];
+
+        $validacion->update([
+            'ruta_cedula_cliente' => $rutaCedula,
+            'datos_cedula_cliente' => $datosCedula,
+        ]);
+
+        if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula) {
+            Storage::disk('public')->delete($rutaAnterior);
+        }
+
+        return response()->json([
+            'success' => true,
+            'ruta_cedula_cliente' => $rutaCedula,
+            'datos_cedula_cliente' => $datosCedula,
+            'cedula_url' => route('validacion-documentos.cedula', $validacion),
+        ]);
+    }
+
+    public function generarConstancia(Request $request, ValidacionDocumento $validacion): JsonResponse
+    {
+        abort_unless(
+            $validacion->estado_revision === 'aprobada',
+            409,
+            'Debes subir el comprobante de pago antes de generar la constancia.',
+        );
+
+        $validated = $request->validate([
+            'nombre_completo' => ['required', 'string', 'max:200'],
+            'cedula' => ['required', 'string', 'max:30'],
+            'estado_civil' => ['nullable', 'string', 'max:60'],
+            'es_casado' => ['required', 'boolean'],
+            'nombre_conyuge' => ['nullable', 'string', 'max:200', 'required_if:es_casado,true'],
+            'cedula_conyuge' => ['nullable', 'string', 'max:30'],
+        ]);
+
+        $plantilla = storage_path('app/plantillas/Contrato_compra_venta_vehiculo_editable.docx');
+        if (! is_file($plantilla)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se encontró la plantilla Contrato_compra_venta_vehiculo_editable.docx en storage/app/plantillas/.',
+            ], 500);
+        }
+
+        $vehiculoDatos = $this->resolverDatosVehiculoContrato($validacion);
+
+        $nombreCompleto = mb_strtoupper(trim($validated['nombre_completo']), 'UTF-8');
+        $cedula = trim($validated['cedula']);
+        $estadoCivil = mb_strtoupper(trim((string) ($validated['estado_civil'] ?? '')), 'UTF-8');
+        $esCasado = (bool) $validated['es_casado'];
+        $nombreConyuge = $esCasado ? mb_strtoupper(trim((string) ($validated['nombre_conyuge'] ?? '')), 'UTF-8') : '';
+        $cedulaConyuge = $esCasado ? trim((string) ($validated['cedula_conyuge'] ?? '')) : '';
+
+        $ahora = Carbon::now();
+        $meses = [
+            1 => 'enero',
+            2 => 'febrero',
+            3 => 'marzo',
+            4 => 'abril',
+            5 => 'mayo',
+            6 => 'junio',
+            7 => 'julio',
+            8 => 'agosto',
+            9 => 'septiembre',
+            10 => 'octubre',
+            11 => 'noviembre',
+            12 => 'diciembre',
+        ];
+        $diaNum = (int) $ahora->format('j');
+        $anioNum = (int) $ahora->format('Y');
+        $mesNombre = $meses[(int) $ahora->format('n')] ?? $ahora->format('F');
+
+        $costoAdquisicion = (float) ($vehiculoDatos['costo_adquisicion'] ?? 0);
+        $costoFormateado = number_format($costoAdquisicion, 2, '.', ',');
+        $costoLetras = $this->montoALetras($costoAdquisicion);
+
+        $rutaRelativa = sprintf(
+            'documentos/contratos/contrato_%s_%s.docx',
+            preg_replace('/[^A-Z0-9]/i', '', $validacion->placa) ?: $validacion->id,
+            $ahora->format('Ymd_His'),
+        );
+        $rutaAbsoluta = Storage::disk('public')->path($rutaRelativa);
+        $directorio = dirname($rutaAbsoluta);
+
+        if (! is_dir($directorio) && ! mkdir($directorio, 0775, true) && ! is_dir($directorio)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo crear el directorio para guardar el contrato generado.',
+            ], 500);
+        }
+
+        try {
+            $template = new TemplateProcessor($plantilla);
+            $template->setValue('dia_letras', $this->numeroALetras($diaNum));
+            $template->setValue('dia', (string) $diaNum);
+            $template->setValue('mes', $mesNombre);
+            $template->setValue('anio_letra', $this->numeroALetras($anioNum));
+            $template->setValue('anio', (string) $anioNum);
+
+            $template->setValue('cliente', $nombreCompleto);
+            $template->setValue('ci_cliente', $cedula);
+
+            // Primera ocurrencia (cláusula PRIMERA) y segunda ocurrencia (bloque de firma del cónyuge)
+            $textoConyugeClausula = $esCasado && $nombreConyuge !== '' ? "y su cónyuge {$nombreConyuge}" : '';
+            $textoConyugeFirma = $esCasado ? $nombreConyuge : '';
+            $template->setValue('esta_casado', $textoConyugeClausula, 1);
+            $template->setValue('esta_casado', $textoConyugeFirma, 1);
+            $template->setValue('ci_esta_casado', $esCasado ? $cedulaConyuge : '');
+
+            $template->setValue('marca_vehiculo', (string) ($vehiculoDatos['marca'] ?? ''));
+            $template->setValue('modelo_vehiculo ', (string) ($vehiculoDatos['modelo'] ?? ''));
+            $template->setValue('modelo_vehiculo', (string) ($vehiculoDatos['modelo'] ?? ''));
+            $template->setValue('anio_vehiculo ', (string) ($vehiculoDatos['anio'] ?? ''));
+            $template->setValue('anio_vehiculo', (string) ($vehiculoDatos['anio'] ?? ''));
+            $template->setValue('color_vehiculo ', (string) ($vehiculoDatos['color'] ?? ''));
+            $template->setValue('color_vehiculo', (string) ($vehiculoDatos['color'] ?? ''));
+            $template->setValue('chasis_vehiculo ', (string) ($vehiculoDatos['chasis'] ?? ''));
+            $template->setValue('chasis_vehiculo', (string) ($vehiculoDatos['chasis'] ?? ''));
+            $template->setValue('motor_vehiculo ', (string) ($vehiculoDatos['motor'] ?? ''));
+            $template->setValue('motor_vehiculo', (string) ($vehiculoDatos['motor'] ?? ''));
+            $template->setValue('id_vehiculo', (string) ($vehiculoDatos['id_vehiculo'] ?? $validacion->placa));
+
+            $template->setValue('costo_adquisicion', $costoFormateado);
+            $template->setValue('costo_letras', $costoLetras);
+
+            $template->saveAs($rutaAbsoluta);
+        } catch (Throwable $exception) {
+            Log::error('Error al generar contrato Word con PhpWord.', [
+                'validacion_id' => $validacion->id,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo generar el documento Word del contrato: '.$exception->getMessage(),
+            ], 500);
+        }
+
+        $rutaAnterior = $validacion->ruta_contrato_generado;
+        $datosCedulaActualizados = [
+            'nombre_completo' => $nombreCompleto,
+            'cedula' => $cedula,
+            'estado_civil' => $estadoCivil,
+            'es_casado' => $esCasado,
+            'nombre_conyuge' => $nombreConyuge,
+            'cedula_conyuge' => $cedulaConyuge,
+        ];
+
+        $validacion->update([
+            'datos_cedula_cliente' => $datosCedulaActualizados,
+            'ruta_contrato_generado' => $rutaRelativa,
+        ]);
+
+        Documentos_vehiculo::query()
+            ->where('id_vehiculo', $validacion->placa)
+            ->update([
+                'ruta_contrato' => $rutaRelativa,
+                'ruta_constancia' => $rutaRelativa,
+            ]);
+
+        if ($rutaAnterior !== null && $rutaAnterior !== $rutaRelativa) {
+            Storage::disk('public')->delete($rutaAnterior);
+        }
+
+        return response()->json([
+            'success' => true,
+            'ruta_contrato_generado' => $rutaRelativa,
+            'contrato_url' => route('validacion-documentos.contrato', $validacion),
+            'datos_cedula_cliente' => $datosCedulaActualizados,
+        ]);
+    }
+
+    public function descargarContrato(ValidacionDocumento $validacion): StreamedResponse
+    {
+        abort_unless(
+            $validacion->ruta_contrato_generado !== null
+                && Storage::disk('public')->exists($validacion->ruta_contrato_generado),
+            404,
+        );
+
+        return Storage::disk('public')->download(
+            $validacion->ruta_contrato_generado,
+            "contrato-compra-venta-{$validacion->placa}.docx",
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
+    }
+
+    public function descargarCedula(ValidacionDocumento $validacion): StreamedResponse
+    {
+        abort_unless(
+            $validacion->ruta_cedula_cliente !== null
+                && Storage::disk('public')->exists($validacion->ruta_cedula_cliente),
+            404,
+        );
+
+        $extension = pathinfo($validacion->ruta_cedula_cliente, PATHINFO_EXTENSION);
+        $nombreDescarga = $extension !== ''
+            ? "cedula-cliente-{$validacion->placa}.{$extension}"
+            : "cedula-cliente-{$validacion->placa}";
+
+        return Storage::disk('public')->download(
+            $validacion->ruta_cedula_cliente,
+            $nombreDescarga,
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    protected function ejecutarEscaneoGemini(string $apiKey, array $payload): array
+    {
+        $scriptPath = base_path('escanear_gemini.cjs');
+        if (! is_file($scriptPath)) {
+            throw new RuntimeException('No se encontró el script escanear_gemini.cjs en la raíz del proyecto.');
+        }
+
+        $token = bin2hex(random_bytes(12));
+        $archivoEntrada = storage_path("app/gemini_in_{$token}.json");
+        $archivoSalida = storage_path("app/gemini_out_{$token}.json");
+
+        try {
+            $jsonPayload = json_encode($payload, JSON_UNESCAPED_UNICODE);
+            if ($jsonPayload === false || file_put_contents($archivoEntrada, $jsonPayload) === false) {
+                throw new RuntimeException('No se pudo crear el archivo temporal de entrada para Gemini.');
+            }
+
+            $comando = sprintf(
+                'node %s %s %s %s 2>&1',
+                escapeshellarg($scriptPath),
+                escapeshellarg($apiKey),
+                escapeshellarg($archivoEntrada),
+                escapeshellarg($archivoSalida),
+            );
+
+            $salida = [];
+            $codigo = 0;
+            exec($comando, $salida, $codigo);
+
+            if (! is_file($archivoSalida)) {
+                throw new RuntimeException(
+                    'escanear_gemini.cjs no generó archivo de salida (código '.$codigo.').',
+                );
+            }
+
+            $contenido = file_get_contents($archivoSalida);
+            $decodificado = is_string($contenido) ? json_decode($contenido, true) : null;
+
+            if (! is_array($decodificado)) {
+                throw new RuntimeException('La salida de escanear_gemini.cjs no es un JSON válido.');
+            }
+
+            return $decodificado;
+        } finally {
+            @unlink($archivoEntrada);
+            @unlink($archivoSalida);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $datosIngresoParaVista
+     * @return array<string, mixed>
+     */
+    private function resolverDatosVehiculoContrato(
+        ValidacionDocumento $validacion,
+        ?array $datosIngresoParaVista = null,
+    ): array {
+        $vehiculo = Vehiculo::query()
+            ->with(['marca', 'color'])
+            ->find($validacion->placa);
+
+        if ($vehiculo !== null) {
+            return [
+                'id_vehiculo' => $vehiculo->id_vehiculo,
+                'marca' => $vehiculo->marca?->nombre ?? '',
+                'modelo' => $vehiculo->modelo ?? '',
+                'anio' => $vehiculo->anio ?? '',
+                'color' => $vehiculo->color?->nombre ?? '',
+                'chasis' => $vehiculo->chasis ?? '',
+                'motor' => $vehiculo->motor ?? '',
+                'costo_adquisicion' => $vehiculo->costo_adquisicion ?? 0,
+            ];
+        }
+
+        $datosIngreso = is_array($validacion->datos_ingreso) ? $validacion->datos_ingreso : [];
+        $marca = $datosIngresoParaVista['id_marca']
+            ?? (isset($datosIngreso['id_marca']) ? DB::table('marca_vehiculos')->where('id_marca', $datosIngreso['id_marca'])->value('nombre') : null)
+            ?? ($validacion->datos_documento['marca'] ?? '');
+        $color = $datosIngresoParaVista['id_color']
+            ?? (isset($datosIngreso['id_color']) ? DB::table('color_vehiculos')->where('id_color', $datosIngreso['id_color'])->value('nombre') : null)
+            ?? ($validacion->datos_documento['color'] ?? '');
+
+        return [
+            'id_vehiculo' => $datosIngreso['id_vehiculo'] ?? $validacion->placa,
+            'marca' => (string) $marca,
+            'modelo' => (string) ($datosIngreso['modelo'] ?? $validacion->datos_documento['modelo'] ?? ''),
+            'anio' => (string) ($datosIngreso['anio'] ?? $validacion->datos_documento['anio'] ?? ''),
+            'color' => (string) $color,
+            'chasis' => (string) ($datosIngreso['chasis'] ?? $validacion->datos_documento['chasis'] ?? ''),
+            'motor' => (string) ($datosIngreso['motor'] ?? $validacion->datos_documento['motor'] ?? ''),
+            'costo_adquisicion' => (float) ($datosIngreso['costo_adquisicion'] ?? 0),
+        ];
+    }
+
+    private function montoALetras(float $monto): string
+    {
+        $entero = (int) floor($monto);
+        $centavos = (int) round(($monto - $entero) * 100);
+        if ($centavos >= 100) {
+            $entero++;
+            $centavos = 0;
+        }
+
+        $textoEntero = mb_strtoupper($this->numeroALetras($entero), 'UTF-8');
+
+        return $centavos > 0
+            ? sprintf('%s CON %02d/100', $textoEntero, $centavos)
+            : $textoEntero;
+    }
+
+    private function numeroALetras(int $numero): string
+    {
+        if ($numero === 0) {
+            return 'cero';
+        }
+
+        $unidades = [
+            '', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve',
+            'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve',
+            'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro', 'veinticinco', 'veintiséis', 'veintisiete', 'veintiocho', 'veintinueve',
+        ];
+        $decenas = ['', '', 'veinte', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];
+        $centenas = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+
+        if ($numero < 30) {
+            return $unidades[$numero];
+        }
+
+        if ($numero < 100) {
+            $d = intdiv($numero, 10);
+            $u = $numero % 10;
+
+            return $u === 0 ? $decenas[$d] : "{$decenas[$d]} y {$unidades[$u]}";
+        }
+
+        if ($numero === 100) {
+            return 'cien';
+        }
+
+        if ($numero < 1000) {
+            $c = intdiv($numero, 100);
+            $r = $numero % 100;
+
+            return $r === 0 ? $centenas[$c] : "{$centenas[$c]} {$this->numeroALetras($r)}";
+        }
+
+        if ($numero < 1000000) {
+            $miles = intdiv($numero, 1000);
+            $r = $numero % 1000;
+            $prefijo = $miles === 1 ? 'mil' : $this->numeroALetras($miles).' mil';
+            $prefijo = preg_replace('/uno mil$/', 'un mil', $prefijo) ?? $prefijo;
+
+            return $r === 0 ? $prefijo : "{$prefijo} {$this->numeroALetras($r)}";
+        }
+
+        $millones = intdiv($numero, 1000000);
+        $r = $numero % 1000000;
+        $prefijo = $millones === 1 ? 'un millón' : $this->numeroALetras($millones).' millones';
+
+        return $r === 0 ? $prefijo : "{$prefijo} {$this->numeroALetras($r)}";
     }
 
     public function reenviar(Request $request, ValidacionDocumento $validacion): RedirectResponse
@@ -995,13 +1653,10 @@ class ValidacionDocumentosController extends Controller
     }
 
     /**
-     * @param  array<string>  $rutasImagenesPublicas
-     * @return array<string>
+     * @return array{0: array<string, mixed>, 1: array<string, mixed>, 2: array<string>}
      */
-    private function crearVehiculoDesdeExpediente(
-        ValidacionDocumento $validacion,
-        array &$rutasImagenesPublicas,
-    ): array {
+    private function validarDatosIngresoDesdeExpediente(ValidacionDocumento $validacion): array
+    {
         $datosIngreso = $validacion->datos_ingreso;
         if (! is_array($datosIngreso)) {
             throw ValidationException::withMessages([
@@ -1053,6 +1708,19 @@ class ValidacionDocumentosController extends Controller
             }
         }
 
+        return [$datosIngreso, $datosValidados, $rutasImagenesTemporales];
+    }
+
+    /**
+     * @param  array<string>  $rutasImagenesPublicas
+     * @return array<string>
+     */
+    private function crearVehiculoDesdeExpediente(
+        ValidacionDocumento $validacion,
+        array &$rutasImagenesPublicas,
+    ): array {
+        [$datosIngreso, $datosValidados, $rutasImagenesTemporales] = $this->validarDatosIngresoDesdeExpediente($validacion);
+
         $tipoVehiculo = $datosValidados['tipo_vehiculo'] ?? null;
         $servicio = $datosValidados['servicio'] ?? null;
         $fechaRevision = $datosValidados['ultima_fecha_revision'] ?? null;
@@ -1091,6 +1759,16 @@ class ValidacionDocumentosController extends Controller
             }
 
             $documentosVehiculo['ruta_cuv'] = $validacion->ruta_cuv;
+        }
+
+        if ($validacion->ruta_comprobante_pago !== null) {
+            if (! Storage::disk('local')->exists($validacion->ruta_comprobante_pago)) {
+                throw ValidationException::withMessages([
+                    'documento_comprobante' => 'No se encontró el comprobante de pago adjunto al expediente.',
+                ]);
+            }
+
+            $documentosVehiculo['ruta_comprobante_pago'] = $validacion->ruta_comprobante_pago;
         }
 
         if (count($documentosVehiculo) > 1) {

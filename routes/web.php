@@ -52,6 +52,18 @@ Route::middleware(['auth'])->group(function () {
         ->name('validacion-documentos.reenviar');
     Route::patch('/validacion-documentos/{validacion}', [ValidacionDocumentosController::class, 'decidir'])
         ->name('validacion-documentos.decidir');
+    Route::get('/validacion-documentos/{validacion}/comprobante', [ValidacionDocumentosController::class, 'comprobante'])
+        ->name('validacion-documentos.comprobante');
+    Route::post('/validacion-documentos/{validacion}/comprobante', [ValidacionDocumentosController::class, 'subirComprobante'])
+        ->name('validacion-documentos.comprobante.store');
+    Route::post('/validacion-documentos/{validacion}/escanear-cedula', [ValidacionDocumentosController::class, 'escanearCedula'])
+        ->name('validacion-documentos.escanear.cedula');
+    Route::post('/validacion-documentos/{validacion}/generar-constancia', [ValidacionDocumentosController::class, 'generarConstancia'])
+        ->name('validacion-documentos.generar.constancia');
+    Route::get('/validacion-documentos/{validacion}/contrato', [ValidacionDocumentosController::class, 'descargarContrato'])
+        ->name('validacion-documentos.contrato');
+    Route::get('/validacion-documentos/{validacion}/cedula', [ValidacionDocumentosController::class, 'descargarCedula'])
+        ->name('validacion-documentos.cedula');
 });
 
 Route::middleware('auth')->group(function () {

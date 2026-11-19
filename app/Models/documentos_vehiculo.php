@@ -12,6 +12,7 @@ class Documentos_vehiculo extends Model
         'ruta_contrato',
         'ruta_matricula',
         'ruta_cuv',
+        'ruta_comprobante_pago',
         'ruta_impronta',
         'ruta_constancia',
         'ruta_acta_entrega',

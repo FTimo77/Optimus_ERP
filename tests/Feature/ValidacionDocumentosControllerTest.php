@@ -188,23 +188,39 @@ class ValidacionDocumentosControllerTest extends TestCase
         $response->assertRedirect(route('validacion-documentos.show', $validacion));
         $this->assertDatabaseHas('validacion_documentos', [
             'id' => $validacion->id,
-            'estado_revision' => 'aprobada',
+            'estado_revision' => 'pendiente_comprobante',
             'comentario_revision' => 'Datos verificados contra el documento.',
             'revisado_por' => $reviewer->id,
         ]);
         $this->assertNotNull($validacion->fresh()->revisado_en);
+        $this->assertDatabaseMissing('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+        ]);
+        $rutaCuv = $validacion->fresh()->ruta_cuv;
+        $this->assertIsString($rutaCuv);
+        Storage::disk('local')->assertExists($rutaCuv);
+
+        $uploadResponse = $this->actingAs($reviewer)
+            ->from(route('validacion-documentos.show', $validacion))
+            ->post(route('validacion-documentos.comprobante.store', $validacion), [
+                'documento_comprobante' => UploadedFile::fake()->create('comprobante.pdf', 100, 'application/pdf'),
+            ]);
+
+        $uploadResponse->assertRedirect(route('validacion-documentos.show', $validacion));
+        $validacion->refresh();
+        $this->assertSame('aprobada', $validacion->estado_revision);
+        $this->assertNotNull($validacion->ruta_comprobante_pago);
+        Storage::disk('local')->assertExists($validacion->ruta_comprobante_pago);
         $this->assertDatabaseHas('vehiculos', [
             'id_vehiculo' => 'PBA1234',
             'id_marca' => $catalogIds['id_marca'],
             'modelo' => 'Corolla',
             'id_estado' => DB::table('estado_vehiculos')->where('nombre', 'Creado')->value('id_estado'),
         ]);
-        $rutaCuv = $validacion->fresh()->ruta_cuv;
-        $this->assertIsString($rutaCuv);
-        Storage::disk('local')->assertExists($rutaCuv);
         $this->assertDatabaseHas('documentos_vehiculos', [
             'id_vehiculo' => 'PBA1234',
             'ruta_cuv' => $rutaCuv,
+            'ruta_comprobante_pago' => $validacion->ruta_comprobante_pago,
         ]);
     }
 
@@ -628,6 +644,71 @@ class ValidacionDocumentosControllerTest extends TestCase
             ->assertJsonPath('comparacion.13.estado', 'diferente')
             ->assertJsonPath('comparacion.14.clave', 'lugar_revision')
             ->assertJsonPath('comparacion.14.estado', 'diferente');
+    }
+
+    public function test_authenticated_user_can_upload_payment_receipt_from_show_to_create_vehicle(): void
+    {
+        Storage::fake('local');
+        Storage::fake('public');
+
+        $catalogs = $this->createCatalogs();
+        $uploader = User::factory()->create();
+        $reviewer = User::factory()->create();
+
+        $validacion = $this->createValidacion($uploader, [
+            'estado_revision' => 'pendiente_comprobante',
+            'revisado_por' => $reviewer->id,
+            'revisado_en' => now(),
+            'datos_ingreso' => array_merge($catalogs, [
+                'id_vehiculo' => 'PBA1234',
+                'modelo' => 'Corolla',
+                'anio' => 2024,
+                'motor' => 'MTR123456',
+                'chasis' => 'CHS123456',
+                'cilindraje' => '1800',
+                'costo_adquisicion' => 18000,
+                'precio_venta' => 21500,
+                'imagenes' => [],
+            ]),
+        ]);
+
+        $tempImage = "validacion-documentos/{$validacion->id}/imagenes/foto1.jpg";
+        Storage::disk('local')->put($tempImage, 'fake-image-content');
+        $datosIngreso = $validacion->datos_ingreso;
+        $datosIngreso['imagenes'] = [$tempImage];
+        $validacion->update(['datos_ingreso' => $datosIngreso]);
+
+        $uploadResponse = $this->actingAs($reviewer)
+            ->from(route('validacion-documentos.show', $validacion))
+            ->post(route('validacion-documentos.comprobante.store', $validacion), [
+                'documento_comprobante' => UploadedFile::fake()->create('comprobante.pdf', 120, 'application/pdf'),
+            ]);
+
+        $uploadResponse->assertRedirect(route('validacion-documentos.show', $validacion));
+
+        $validacion->refresh();
+        $this->assertSame('aprobada', $validacion->estado_revision);
+        $this->assertNotNull($validacion->ruta_comprobante_pago);
+        Storage::disk('local')->assertExists($validacion->ruta_comprobante_pago);
+        Storage::disk('local')->assertMissing($tempImage);
+        Storage::disk('public')->assertExists('vehiculos/PBA1234/foto1.jpg');
+
+        $this->assertDatabaseHas('vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'modelo' => 'Corolla',
+        ]);
+
+        $this->assertDatabaseHas('documentos_vehiculos', [
+            'id_vehiculo' => 'PBA1234',
+            'ruta_matricula' => 'validacion-documentos/documento.jpg',
+            'ruta_comprobante_pago' => $validacion->ruta_comprobante_pago,
+        ]);
+
+        $downloadResponse = $this->actingAs($reviewer)
+            ->get(route('validacion-documentos.comprobante', $validacion));
+
+        $downloadResponse->assertOk()
+            ->assertHeader('X-Content-Type-Options', 'nosniff');
     }
 
     /**

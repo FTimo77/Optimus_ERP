@@ -13,15 +13,27 @@ defineProps({
     },
 });
 
+const estadoVisual = (validacion) => {
+    if (validacion.estado_revision === 'aprobada' && !validacion.tiene_contrato) {
+        return 'pendiente_constancia';
+    }
+
+    return validacion.estado_revision;
+};
+
 const estadoTexto = (estado) => ({
     pendiente: 'Pendiente',
-    aprobada: 'Aprobada',
+    pendiente_comprobante: 'Pendiente subir comprobante de pago',
+    pendiente_constancia: 'Pendiente generar constancia',
+    aprobada: 'Aprobado',
     rechazada: 'Rechazada',
     registrada: 'Registrada en inventario',
 }[estado] || estado);
 
 const estadoClases = (estado) => ({
     pendiente: 'bg-amber-100 text-amber-800',
+    pendiente_comprobante: 'bg-yellow-100 text-yellow-900',
+    pendiente_constancia: 'bg-indigo-100 text-indigo-900',
     aprobada: 'bg-green-100 text-green-800',
     rechazada: 'bg-red-100 text-red-800',
     registrada: 'bg-blue-100 text-blue-800',
@@ -86,8 +98,8 @@ const fechaTexto = (fecha) => fecha
                                         </span>
                                     </td>
                                     <td class="whitespace-nowrap px-5 py-4">
-                                        <span :class="estadoClases(validacion.estado_revision)" class="rounded-full px-2.5 py-1 text-xs font-semibold">
-                                            {{ estadoTexto(validacion.estado_revision) }}
+                                        <span :class="estadoClases(estadoVisual(validacion))" class="rounded-full px-2.5 py-1 text-xs font-semibold">
+                                            {{ estadoTexto(estadoVisual(validacion)) }}
                                         </span>
                                     </td>
                                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-600">

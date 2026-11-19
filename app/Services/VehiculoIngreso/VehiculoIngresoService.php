@@ -124,7 +124,7 @@ class VehiculoIngresoService
         $placaNormalizada = strtoupper(preg_replace('/[^A-Z0-9]/', '', $validated['id_vehiculo']) ?? '');
         $auditoriaSinAprobacion = ValidacionDocumento::query()
             ->where('placa', $placaNormalizada)
-            ->whereIn('estado_revision', ['borrador', 'pendiente', 'rechazada'])
+            ->whereIn('estado_revision', ['borrador', 'pendiente', 'pendiente_comprobante', 'rechazada'])
             ->exists();
 
         if ($validacionAuditoria === null && $auditoriaSinAprobacion) {
