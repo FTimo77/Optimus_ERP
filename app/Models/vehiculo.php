@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Vehiculo extends Model
@@ -109,5 +110,15 @@ class Vehiculo extends Model
     {
         return $this->hasOne(Imagen_vehiculo::class, 'id_vehiculo', 'id_vehiculo')
             ->where('es_principal', true);
+    }
+
+    public function multas(): HasMany
+    {
+        return $this->hasMany(MultaVehiculo::class, 'id_vehiculo', 'id_vehiculo');
+    }
+
+    public function custodias(): HasMany
+    {
+        return $this->hasMany(CustodiaDocumentoVehiculo::class, 'id_vehiculo', 'id_vehiculo');
     }
 }

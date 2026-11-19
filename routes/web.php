@@ -25,6 +25,14 @@ Route::middleware(['auth'])->group(function () {
     // 1. MÓDULO DE INVENTARIO (Para consulta general)
     Route::get('/vehiculos/inventario', [InventarioVehiculoController::class, 'index'])
         ->name('vehiculos.index');
+    Route::post('/vehiculos/{vehiculo}/multas/{multa}/pagar', [InventarioVehiculoController::class, 'pagarMulta'])
+        ->name('vehiculos.multas.pagar');
+    Route::get('/vehiculos/{vehiculo}/multas/{multa}/comprobante', [InventarioVehiculoController::class, 'comprobanteMulta'])
+        ->name('vehiculos.multas.comprobante');
+    Route::post('/vehiculos/{vehiculo}/custodia/solicitar', [InventarioVehiculoController::class, 'solicitarEntregaCustodia'])
+        ->name('vehiculos.custodia.solicitar');
+    Route::patch('/vehiculos/{vehiculo}/custodia/{custodia}/recibir', [InventarioVehiculoController::class, 'confirmarRecepcionCustodia'])
+        ->name('vehiculos.custodia.recibir');
 
     // 2. MÓDULO DE COMPRAS / INGRESO (Para registrar adquisiciones)
     Route::get('/vehiculos/ingreso', [VehiculoIngresoController::class, 'create'])

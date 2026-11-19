@@ -28,7 +28,6 @@ const props = defineProps({
 const emit = defineEmits(['file-selected', 'success', 'error']);
 
 const archivoMatricula = ref(null);
-const cedulaPropietarioManual = ref('');
 const matriculaInput = ref(null);
 const escaneandoIA = ref(false);
 const errorAuditoria = ref('');
@@ -36,14 +35,9 @@ const erroresValidacionAuditoria = ref([]);
 
 const seleccionarMatricula = (event) => {
     archivoMatricula.value = event.target.files[0] || null;
-    cedulaPropietarioManual.value = '';
     errorAuditoria.value = '';
     erroresValidacionAuditoria.value = [];
     emit('file-selected', archivoMatricula.value);
-};
-
-const actualizarCedulaPropietario = (event) => {
-    cedulaPropietarioManual.value = event.target.value.replace(/\D/g, '').slice(0, 10);
 };
 
 const escanearYComparar = async () => {
@@ -59,9 +53,6 @@ const escanearYComparar = async () => {
 
     const formData = new FormData();
     formData.append('documento', archivoMatricula.value);
-    if (cedulaPropietarioManual.value) {
-        formData.append('cedula_propietario', cedulaPropietarioManual.value);
-    }
 
     const manejarError = (respuesta, mensajeAlternativo) => {
         const message = respuesta?.message || mensajeAlternativo;
@@ -101,7 +92,6 @@ const reset = () => {
         matriculaInput.value.value = '';
     }
     archivoMatricula.value = null;
-    cedulaPropietarioManual.value = '';
     errorAuditoria.value = '';
     erroresValidacionAuditoria.value = [];
 };
@@ -125,29 +115,6 @@ defineExpose({ reset });
             </div>
 
             <div class="flex w-full flex-col gap-3 md:w-auto md:flex-row md:items-end">
-                <div class="w-full md:w-48">
-                    <label
-                        :for="`${inputIdPrefix}-cedula`"
-                        class="mb-1 block text-xs font-semibold text-gray-200"
-                    >
-                        Cédula del propietario (opcional)
-                    </label>
-                    <input
-                        :id="`${inputIdPrefix}-cedula`"
-                        v-model="cedulaPropietarioManual"
-                        :disabled="escaneandoIA"
-                        type="text"
-                        inputmode="numeric"
-                        maxlength="10"
-                        autocomplete="off"
-                        placeholder="10 dígitos"
-                        class="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-xs text-white placeholder:text-gray-400 focus:border-yellow-400 focus:outline-none"
-                        @input="actualizarCedulaPropietario"
-                    />
-                    <p class="mt-1 text-[10px] text-gray-400">
-                        Se usa si la IA no la detecta.
-                    </p>
-                </div>
                 <div>
                     <label
                         :for="`${inputIdPrefix}-archivo`"

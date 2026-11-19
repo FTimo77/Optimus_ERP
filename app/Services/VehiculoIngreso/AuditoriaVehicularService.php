@@ -324,16 +324,23 @@ class AuditoriaVehicularService
             ];
         }
 
+        $tieneMultas = $autorityRespondio && count($listadoMultas) > 0;
+        $totalRedondeado = $autorityRespondio ? round($totalMultas, 2) : null;
+        $requiereRevisionManual = $tieneMultas && ($totalRedondeado ?? 0.0) <= 0.0;
+
         return [
             'ok' => $autorityRespondio,
-            'tiene_multas' => $autorityRespondio && count($listadoMultas) > 0,
+            'tiene_multas' => $tieneMultas,
+            'requiere_revision_manual' => $requiereRevisionManual,
             'cantidad' => $cantidadTotalMultas,
             'cantidad_multas' => $cantidadTotalMultas,
-            'total' => $autorityRespondio ? round($totalMultas, 2) : null,
-            'total_pagar' => $autorityRespondio ? round($totalMultas, 2) : null,
-            'mensaje' => $autorityRespondio
-                ? 'Fuente oficial: Autority'
-                : 'Autority no respondió en este intento. Verifique manualmente o reintente.',
+            'total' => $totalRedondeado,
+            'total_pagar' => $totalRedondeado,
+            'mensaje' => ! $autorityRespondio
+                ? 'Autority no respondió en este intento. Verifique manualmente o reintente.'
+                : ($requiereRevisionManual
+                    ? 'Multa detectada con valor $0.00: requiere revisión manual.'
+                    : 'Fuente oficial: Autority'),
             'listado' => $listadoMultas,
         ];
     }
@@ -783,16 +790,20 @@ class AuditoriaVehicularService
         $totalReportado = is_numeric($raw['total'] ?? null) ? round((float) $raw['total'], 2) : round($totalCalculado, 2);
         $cantidad = is_numeric($raw['cantidad'] ?? null) ? max(0, (int) $raw['cantidad']) : count($listadoNormalizado);
         $tieneMultas = ($raw['tiene_multas'] ?? false) === true || $cantidad > 0 || $totalReportado > 0;
+        $requiereRevisionManual = $tieneMultas && $totalReportado <= 0.0;
 
         $resultado = [
             'ok' => true,
             'fuente' => strtoupper($clave),
             'nombre' => $nombreFuente,
             'tiene_multas' => $tieneMultas,
+            'requiere_revision_manual' => $requiereRevisionManual,
             'cantidad' => $cantidad,
             'total' => $totalReportado,
             'error' => null,
-            'mensaje' => "Fuente directa: {$nombreFuente}",
+            'mensaje' => $requiereRevisionManual
+                ? "Fuente directa: {$nombreFuente} · Multa detectada con valor $0.00: requiere revisión manual."
+                : "Fuente directa: {$nombreFuente}",
             'listado' => $listadoNormalizado,
         ];
 
