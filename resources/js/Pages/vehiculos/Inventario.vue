@@ -30,7 +30,7 @@ const ITEMS_CUSTODIA = [
     { key: 'matricula', label: 'Documento de matrícula' },
     { key: 'rtv', label: 'Revisión Técnica Vehicular (RTV)' },
     { key: 'contrato_legalizado', label: 'Contrato legalizado' },
-    { key: 'llaves', label: 'Llaves del vehículo' },
+    { key: 'llaves', label: 'Duplicado de llaves del vehículo' },
 ];
 
 const vehiculoSeleccionadoId = ref(null);
@@ -57,6 +57,58 @@ const entregaForm = useForm({
 
 const recepcionForm = useForm({});
 const custodiaProcesandoId = ref(null);
+
+const hoyIso = new Date().toISOString().slice(0, 10);
+const abonoPagoForm = useForm({
+    comprobante: null,
+    monto: '',
+    fecha_pago: hoyIso,
+});
+const abonoPagoInput = ref(null);
+
+const contratoForm = useForm({
+    contrato: null,
+});
+const contratoFileInput = ref(null);
+
+const subirContratoVehiculo = () => {
+    if (!vehiculoSeleccionado.value || !contratoForm.contrato) {
+        return;
+    }
+
+    contratoForm.post(route('vehiculos.contrato.store', vehiculoSeleccionado.value.id_vehiculo), {
+        preserveScroll: true,
+        forceFormData: true,
+        onSuccess: () => {
+            contratoForm.reset();
+            if (contratoFileInput.value) {
+                contratoFileInput.value.value = '';
+            }
+        },
+    });
+};
+
+const registrarAbonoVehiculo = () => {
+    if (!vehiculoSeleccionado.value || !abonoPagoForm.comprobante || Number(abonoPagoForm.monto) <= 0) {
+        return;
+    }
+    const saldo = Number(vehiculoSeleccionado.value.saldo_pendiente_pago || 0);
+    if (Number(abonoPagoForm.monto) > saldo + 0.009) {
+        return;
+    }
+
+    abonoPagoForm.post(route('vehiculos.pagos.abono', vehiculoSeleccionado.value.id_vehiculo), {
+        preserveScroll: true,
+        forceFormData: true,
+        onSuccess: () => {
+            abonoPagoForm.reset();
+            abonoPagoForm.fecha_pago = hoyIso;
+            if (abonoPagoInput.value) {
+                abonoPagoInput.value.value = '';
+            }
+        },
+    });
+};
 
 const abrirDetalles = (auto) => {
     vehiculoSeleccionadoId.value = auto.id_vehiculo;
@@ -92,6 +144,80 @@ const formatearFecha = (fecha) => {
 
 const formatearMoneda = (valor) =>
     `$${Number(valor || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const formatearFechaSolo = (fecha) => {
+    if (!fecha) return 'No registrada';
+    const match = String(fecha).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+        return `${match[3]}/${match[2]}/${match[1]}`;
+    }
+    return new Date(fecha).toLocaleDateString('es-EC');
+};
+
+const estadoCaducidadRtv = (fechaCaducidad) => {
+    if (!fechaCaducidad) {
+        return {
+            estado: 'sin_dato',
+            etiqueta: 'RTV sin fecha',
+            detalle: 'Sin fecha de caducidad registrada',
+            clasesTabla: 'border-gray-200 bg-gray-50 text-gray-600',
+            clasesHeader: 'bg-gray-700 text-gray-200',
+        };
+    }
+
+    const match = String(fechaCaducidad).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const fechaObjetivo = match
+        ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+        : new Date(fechaCaducidad);
+
+    if (Number.isNaN(fechaObjetivo.getTime())) {
+        return {
+            estado: 'sin_dato',
+            etiqueta: 'RTV sin fecha',
+            detalle: 'Fecha no válida',
+            clasesTabla: 'border-gray-200 bg-gray-50 text-gray-600',
+            clasesHeader: 'bg-gray-700 text-gray-200',
+        };
+    }
+
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    fechaObjetivo.setHours(0, 0, 0, 0);
+
+    const diffDias = Math.round((fechaObjetivo.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+    const fechaTexto = formatearFechaSolo(fechaCaducidad);
+
+    if (diffDias < 0) {
+        const diasVencida = Math.abs(diffDias);
+        return {
+            estado: 'vencida',
+            etiqueta: 'RTV Vencida',
+            detalle: `Vencida hace ${diasVencida} día(s) (${fechaTexto})`,
+            clasesTabla: 'border-red-300 bg-red-100 text-red-800',
+            clasesHeader: 'bg-red-600 text-white',
+        };
+    }
+
+    if (diffDias <= 30) {
+        return {
+            estado: 'proxima',
+            etiqueta: 'RTV Próxima a vencer',
+            detalle: diffDias === 0
+                ? `Vence hoy (${fechaTexto})`
+                : `Vence en ${diffDias} día(s) (${fechaTexto})`,
+            clasesTabla: 'border-amber-300 bg-amber-100 text-amber-900',
+            clasesHeader: 'bg-amber-500 text-gray-900',
+        };
+    }
+
+    return {
+        estado: 'vigente',
+        etiqueta: 'RTV Vigente',
+        detalle: `Vigente hasta ${fechaTexto}`,
+        clasesTabla: 'border-green-200 bg-green-50 text-green-700',
+        clasesHeader: 'bg-emerald-700 text-emerald-100',
+    };
+};
 
 const seleccionarComprobanteMulta = (idMulta, event) => {
     archivosMultas[idMulta] = event.target.files[0] || null;
@@ -173,6 +299,95 @@ const estadoCustodiaClases = (estado) => ({
     pendiente_recepcion: 'bg-amber-100 text-amber-900 border border-amber-300',
     recibido: 'bg-green-100 text-green-800 border border-green-300',
 }[estado] || 'bg-gray-100 text-gray-700');
+
+// Filtros multicriterio y búsqueda en tiempo real
+const busqueda = ref('');
+const filtroMarca = ref('');
+const filtroEstado = ref('');
+const filtroPatio = ref('');
+const filtroAlerta = ref('');
+
+const marcasDisponibles = computed(() => {
+    const unicas = new Set();
+    for (const auto of props.vehiculos || []) {
+        if (auto.marca?.nombre) unicas.add(auto.marca.nombre);
+    }
+    return Array.from(unicas).sort((a, b) => a.localeCompare(b, 'es'));
+});
+
+const estadosDisponibles = computed(() => {
+    const unicos = new Set();
+    for (const auto of props.vehiculos || []) {
+        if (auto.estado?.nombre) unicos.add(auto.estado.nombre);
+    }
+    return Array.from(unicos).sort((a, b) => a.localeCompare(b, 'es'));
+});
+
+const patiosDisponibles = computed(() => {
+    const unicos = new Set();
+    for (const auto of props.vehiculos || []) {
+        unicos.add(auto.patio?.nombre || 'Sin asignar');
+    }
+    return Array.from(unicos).sort((a, b) => a.localeCompare(b, 'es'));
+});
+
+const tieneAlertaVehiculo = (auto) => {
+    const tieneMultas = Number(auto.multas_pendientes_count || 0) > 0;
+    const estadoRtv = estadoCaducidadRtv(auto.fecha_caducidad_revision).estado;
+    return tieneMultas || estadoRtv === 'vencida' || estadoRtv === 'proxima' || Boolean(auto.contrato_pendiente);
+};
+
+const hayFiltrosActivos = computed(() => Boolean(
+    busqueda.value.trim()
+    || filtroMarca.value
+    || filtroEstado.value
+    || filtroPatio.value
+    || filtroAlerta.value,
+));
+
+const limpiarFiltros = () => {
+    busqueda.value = '';
+    filtroMarca.value = '';
+    filtroEstado.value = '';
+    filtroPatio.value = '';
+    filtroAlerta.value = '';
+};
+
+const vehiculosFiltrados = computed(() => {
+    const termino = busqueda.value.trim().toLowerCase();
+
+    return (props.vehiculos || []).filter((auto) => {
+        if (termino) {
+            const nombreVehiculo = `${auto.marca?.nombre || ''} ${auto.modelo || ''}`.toLowerCase();
+            const placa = String(auto.id_vehiculo || auto.placa || '').toLowerCase();
+            if (!nombreVehiculo.includes(termino) && !placa.includes(termino)) {
+                return false;
+            }
+        }
+
+        if (filtroMarca.value && (auto.marca?.nombre || '') !== filtroMarca.value) {
+            return false;
+        }
+
+        if (filtroEstado.value && (auto.estado?.nombre || '') !== filtroEstado.value) {
+            return false;
+        }
+
+        if (filtroPatio.value && (auto.patio?.nombre || 'Sin asignar') !== filtroPatio.value) {
+            return false;
+        }
+
+        if (filtroAlerta.value === 'en_alerta' && !tieneAlertaVehiculo(auto)) {
+            return false;
+        }
+
+        if (filtroAlerta.value === 'sin_alerta' && tieneAlertaVehiculo(auto)) {
+            return false;
+        }
+
+        return true;
+    });
+});
 </script>
 
 <template>
@@ -208,13 +423,104 @@ const estadoCustodiaClases = (estado) => ({
                     {{ success }}
                 </div>
 
+                <!-- BARRA DE FILTROS MULTICRITERIO Y BÚSQUEDA -->
+                <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm space-y-3">
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                        <div class="lg:col-span-2">
+                            <label for="filtro-busqueda" class="block text-xs font-semibold text-gray-700">
+                                Buscar por placa, marca o modelo
+                            </label>
+                            <input
+                                id="filtro-busqueda"
+                                v-model="busqueda"
+                                type="search"
+                                placeholder="Ej. PBA1234 o Toyota Corolla..."
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            />
+                        </div>
+
+                        <div>
+                            <label for="filtro-marca" class="block text-xs font-semibold text-gray-700">Marca</label>
+                            <select
+                                id="filtro-marca"
+                                v-model="filtroMarca"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            >
+                                <option value="">Todas</option>
+                                <option v-for="marca in marcasDisponibles" :key="marca" :value="marca">
+                                    {{ marca }}
+                                </option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="filtro-estado" class="block text-xs font-semibold text-gray-700">Estado</label>
+                            <select
+                                id="filtro-estado"
+                                v-model="filtroEstado"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            >
+                                <option value="">Todos</option>
+                                <option v-for="estado in estadosDisponibles" :key="estado" :value="estado">
+                                    {{ estado }}
+                                </option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="filtro-patio" class="block text-xs font-semibold text-gray-700">Patio</label>
+                            <select
+                                id="filtro-patio"
+                                v-model="filtroPatio"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            >
+                                <option value="">Todos</option>
+                                <option v-for="patio in patiosDisponibles" :key="patio" :value="patio">
+                                    {{ patio }}
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col justify-between gap-3 border-t border-gray-100 pt-3 sm:flex-row sm:items-center">
+                        <div class="flex flex-wrap items-center gap-3">
+                            <div class="flex items-center gap-2">
+                                <label for="filtro-alerta" class="text-xs font-semibold text-gray-700">Alerta:</label>
+                                <select
+                                    id="filtro-alerta"
+                                    v-model="filtroAlerta"
+                                    class="rounded-md border-gray-300 py-1 text-xs shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                                >
+                                    <option value="">Todas</option>
+                                    <option value="en_alerta">En alerta</option>
+                                    <option value="sin_alerta">Sin alerta / Vigente</option>
+                                </select>
+                            </div>
+                            <span class="text-xs text-gray-600">
+                                Mostrando <strong class="text-gray-900">{{ vehiculosFiltrados.length }}</strong> de
+                                <strong class="text-gray-900">{{ vehiculos.length }}</strong> vehículo(s)
+                            </span>
+                        </div>
+
+                        <button
+                            type="button"
+                            :disabled="!hayFiltrosActivos"
+                            class="w-fit rounded-md border border-gray-300 bg-gray-50 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            @click="limpiarFiltros"
+                        >
+                            Limpiar filtros
+                        </button>
+                    </div>
+                </div>
+
                 <div class="overflow-hidden border border-gray-200 bg-white shadow-sm sm:rounded-lg">
                     <div class="overflow-x-auto">
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-900 text-white">
                                 <tr>
                                     <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Placa</th>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Vehículo</th>
+                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Marca</th>
+                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Modelo</th>
                                     <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Año / Color</th>
                                     <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
                                     <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Alertas</th>
@@ -224,17 +530,25 @@ const estadoCustodiaClases = (estado) => ({
                             </thead>
                             <tbody class="divide-y divide-gray-200 bg-white">
                                 <tr
-                                    v-for="auto in vehiculos"
+                                    v-for="auto in vehiculosFiltrados"
                                     :key="auto.id_vehiculo"
                                     class="cursor-pointer transition duration-150 hover:bg-yellow-50"
                                     @click="abrirDetalles(auto)"
                                 >
                                     <td class="whitespace-nowrap px-6 py-4 font-mono text-sm font-bold text-gray-900">
-                                        {{ auto.id_vehiculo }}
+                                        {{ auto.id_vehiculo || auto.placa }}
+                                    </td>
+                                    <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-gray-900">
+                                        {{ auto.marca?.nombre || 'No registrada' }}
                                     </td>
                                     <td class="px-6 py-4 text-sm text-gray-900">
-                                        <div class="text-base font-bold">{{ auto.marca?.nombre }} {{ auto.modelo }}</div>
+                                        <div class="font-semibold">{{ auto.modelo }}</div>
                                         <div class="text-xs text-gray-500">{{ auto.clase?.nombre }} • {{ auto.transmision?.nombre }}</div>
+                                        <div v-if="auto.tipo_contrato_nombre" class="mt-1">
+                                            <span class="inline-flex rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-800">
+                                                {{ auto.tipo_contrato_nombre }}
+                                            </span>
+                                        </div>
                                     </td>
                                     <td class="px-6 py-4 text-sm text-gray-700">
                                         <span class="font-semibold">{{ auto.anio }}</span>
@@ -243,19 +557,49 @@ const estadoCustodiaClases = (estado) => ({
                                     <td class="px-6 py-4 text-sm text-gray-700">
                                         {{ auto.patio?.nombre || 'Sin asignar' }}
                                     </td>
-                                    <td class="whitespace-nowrap px-6 py-4 text-sm">
-                                        <span
-                                            v-if="auto.multas_pendientes_count > 0"
-                                            class="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2.5 py-1 text-xs font-bold text-red-800"
-                                        >
-                                            ⚠️ {{ auto.multas_pendientes_count }} pendiente(s) · {{ formatearMoneda(auto.multas_pendientes_total) }}
-                                        </span>
-                                        <span
-                                            v-else
-                                            class="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700"
-                                        >
-                                            ✅ Sin alertas
-                                        </span>
+                                    <td class="px-6 py-4 text-sm">
+                                        <div class="flex flex-col items-start gap-1.5">
+                                            <span
+                                                v-if="auto.multas_pendientes_count > 0 && auto.multas_requieren_revision_manual && Number(auto.multas_pendientes_total || 0) <= 0"
+                                                class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-900"
+                                            >
+                                                ⚠️ {{ auto.multas_pendientes_count }} multa(s) · Revisión manual ($0.00)
+                                            </span>
+                                            <span
+                                                v-else-if="auto.multas_pendientes_count > 0"
+                                                class="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2.5 py-0.5 text-xs font-bold text-red-800"
+                                            >
+                                                ⚠️ {{ auto.multas_pendientes_count }} pendiente(s) · {{ formatearMoneda(auto.multas_pendientes_total) }}{{ auto.multas_requieren_revision_manual ? ' · Rev. manual' : '' }}
+                                            </span>
+                                            <span
+                                                v-else
+                                                class="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 text-xs font-semibold text-green-700"
+                                            >
+                                                ✅ Sin multas
+                                            </span>
+
+                                            <span
+                                                :class="estadoCaducidadRtv(auto.fecha_caducidad_revision).clasesTabla"
+                                                class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold"
+                                                :title="estadoCaducidadRtv(auto.fecha_caducidad_revision).detalle"
+                                            >
+                                                {{ estadoCaducidadRtv(auto.fecha_caducidad_revision).estado === 'vencida'
+                                                    ? '🚨'
+                                                    : estadoCaducidadRtv(auto.fecha_caducidad_revision).estado === 'proxima'
+                                                        ? '⏳'
+                                                        : estadoCaducidadRtv(auto.fecha_caducidad_revision).estado === 'vigente'
+                                                            ? '✅'
+                                                            : 'ℹ️' }}
+                                                {{ estadoCaducidadRtv(auto.fecha_caducidad_revision).etiqueta }}
+                                            </span>
+
+                                            <span
+                                                v-if="auto.contrato_pendiente"
+                                                class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-900"
+                                            >
+                                                📄 Contrato pendiente de subir
+                                            </span>
+                                        </div>
                                     </td>
                                     <td class="whitespace-nowrap px-6 py-4 text-sm">
                                         <span class="rounded-full border border-yellow-300 bg-yellow-100 px-2.5 py-1 text-xs font-bold text-yellow-800">
@@ -269,9 +613,11 @@ const estadoCustodiaClases = (estado) => ({
                                     </td>
                                 </tr>
 
-                                <tr v-if="!vehiculos || vehiculos.length === 0">
-                                    <td colspan="7" class="px-6 py-10 text-center text-gray-500">
-                                        No hay vehículos registrados en el inventario todavía.
+                                <tr v-if="!vehiculosFiltrados.length">
+                                    <td colspan="8" class="px-6 py-10 text-center text-gray-500">
+                                        {{ vehiculos.length === 0
+                                            ? 'No hay vehículos registrados en el inventario todavía.'
+                                            : 'Ningún vehículo coincide con los filtros seleccionados.' }}
                                     </td>
                                 </tr>
                             </tbody>
@@ -307,16 +653,40 @@ const estadoCustodiaClases = (estado) => ({
                                     Estado: {{ vehiculoSeleccionado.estado?.nombre }}
                                 </span>
                                 <span
-                                    v-if="vehiculoSeleccionado.multas_pendientes_count > 0"
+                                    v-if="vehiculoSeleccionado.multas_pendientes_count > 0 && vehiculoSeleccionado.multas_requieren_revision_manual && Number(vehiculoSeleccionado.multas_pendientes_total || 0) <= 0"
+                                    class="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-gray-900"
+                                >
+                                    ⚠️ {{ vehiculoSeleccionado.multas_pendientes_count }} multa(s) · Revisión manual ($0.00)
+                                </span>
+                                <span
+                                    v-else-if="vehiculoSeleccionado.multas_pendientes_count > 0"
                                     class="rounded-full bg-red-600 px-2.5 py-0.5 text-xs font-bold text-white"
                                 >
-                                    ⚠️ {{ vehiculoSeleccionado.multas_pendientes_count }} multa(s) pendiente(s) · {{ formatearMoneda(vehiculoSeleccionado.multas_pendientes_total) }}
+                                    ⚠️ {{ vehiculoSeleccionado.multas_pendientes_count }} multa(s) pendiente(s) · {{ formatearMoneda(vehiculoSeleccionado.multas_pendientes_total) }}{{ vehiculoSeleccionado.multas_requieren_revision_manual ? ' · Rev. manual' : '' }}
                                 </span>
                                 <span
                                     v-else
                                     class="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-semibold text-emerald-100"
                                 >
                                     ✅ Sin multas pendientes
+                                </span>
+                                <span
+                                    :class="estadoCaducidadRtv(vehiculoSeleccionado.fecha_caducidad_revision).clasesHeader"
+                                    class="rounded-full px-2.5 py-0.5 text-xs font-bold"
+                                >
+                                    {{ estadoCaducidadRtv(vehiculoSeleccionado.fecha_caducidad_revision).etiqueta }}
+                                </span>
+                                <span
+                                    v-if="vehiculoSeleccionado.tipo_contrato_nombre"
+                                    class="rounded-full bg-indigo-700 px-2.5 py-0.5 text-xs font-semibold text-indigo-100"
+                                >
+                                    Contrato: {{ vehiculoSeleccionado.tipo_contrato_nombre }}
+                                </span>
+                                <span
+                                    v-if="vehiculoSeleccionado.contrato_pendiente"
+                                    class="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-gray-900"
+                                >
+                                    📄 Contrato pendiente de subir
                                 </span>
                             </div>
                             <h3 class="mt-2 text-2xl font-extrabold">
@@ -394,6 +764,91 @@ const estadoCustodiaClases = (estado) => ({
                                             <th class="bg-gray-50 px-4 py-2.5 text-left font-semibold text-gray-600">Proveedor</th>
                                             <td class="px-4 py-2.5 text-gray-900">{{ vehiculoSeleccionado.proveedor_nombre || 'No registrado' }}</td>
                                         </tr>
+                                        <tr>
+                                            <th class="bg-gray-50 px-4 py-2.5 text-left font-semibold text-gray-600">Caducidad RTV</th>
+                                            <td colspan="3" class="px-4 py-2.5">
+                                                <div class="flex flex-wrap items-center gap-2">
+                                                    <span class="font-semibold text-gray-900">
+                                                        {{ formatearFechaSolo(vehiculoSeleccionado.fecha_caducidad_revision) }}
+                                                    </span>
+                                                    <span
+                                                        :class="estadoCaducidadRtv(vehiculoSeleccionado.fecha_caducidad_revision).clasesTabla"
+                                                        class="rounded-full border px-2.5 py-0.5 text-xs font-bold"
+                                                    >
+                                                        {{ estadoCaducidadRtv(vehiculoSeleccionado.fecha_caducidad_revision).etiqueta }}
+                                                    </span>
+                                                    <span class="text-xs text-gray-500">
+                                                        {{ estadoCaducidadRtv(vehiculoSeleccionado.fecha_caducidad_revision).detalle }}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <th class="bg-gray-50 px-4 py-2.5 text-left font-semibold text-gray-600">Tipo de Contrato</th>
+                                            <td colspan="3" class="px-4 py-2.5">
+                                                <div class="space-y-2">
+                                                    <div class="flex flex-wrap items-center gap-2">
+                                                        <span class="font-semibold text-gray-900">
+                                                            {{ vehiculoSeleccionado.tipo_contrato_nombre || 'No asignado' }}
+                                                        </span>
+                                                        <span
+                                                            v-if="vehiculoSeleccionado.tipo_contrato_nombre && !vehiculoSeleccionado.requiere_documento_contrato"
+                                                            class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800"
+                                                        >
+                                                            No requiere archivo
+                                                        </span>
+                                                        <span
+                                                            v-else-if="vehiculoSeleccionado.tiene_contrato_cargado"
+                                                            class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800"
+                                                        >
+                                                            ✅ Contrato cargado
+                                                        </span>
+                                                        <span
+                                                            v-else-if="vehiculoSeleccionado.contrato_pendiente"
+                                                            class="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-900"
+                                                        >
+                                                            📄 Contrato pendiente de subir
+                                                        </span>
+                                                        <a
+                                                            v-if="vehiculoSeleccionado.contrato_archivo_url"
+                                                            :href="vehiculoSeleccionado.contrato_archivo_url"
+                                                            class="text-xs font-semibold text-indigo-700 hover:text-indigo-900"
+                                                        >
+                                                            Descargar contrato
+                                                        </a>
+                                                    </div>
+
+                                                    <form
+                                                        v-if="vehiculoSeleccionado.contrato_pendiente"
+                                                        class="flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50/70 p-3 sm:flex-row sm:items-center"
+                                                        @submit.prevent="subirContratoVehiculo"
+                                                    >
+                                                        <input
+                                                            ref="contratoFileInput"
+                                                            type="file"
+                                                            accept="image/jpeg,image/png,image/webp,.pdf"
+                                                            required
+                                                            class="block w-full text-xs text-gray-700 file:mr-2 file:rounded file:border-0 file:bg-gray-900 file:px-3 file:py-1.5 file:text-white hover:file:bg-gray-700"
+                                                            @change="contratoForm.contrato = $event.target.files[0] || null"
+                                                        />
+                                                        <button
+                                                            type="submit"
+                                                            :disabled="contratoForm.processing || !contratoForm.contrato"
+                                                            class="whitespace-nowrap rounded-md bg-emerald-700 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            {{ contratoForm.processing ? 'Subiendo...' : 'Subir contrato' }}
+                                                        </button>
+                                                    </form>
+                                                    <p
+                                                        v-if="contratoForm.errors.contrato"
+                                                        role="alert"
+                                                        class="text-xs font-medium text-red-600"
+                                                    >
+                                                        {{ contratoForm.errors.contrato }}
+                                                    </p>
+                                                </div>
+                                            </td>
+                                        </tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -454,7 +909,13 @@ const estadoCustodiaClases = (estado) => ({
                                                 {{ multa.fecha_infraccion || 'N/D' }}
                                             </td>
                                             <td class="whitespace-nowrap px-4 py-3 text-right font-mono font-bold text-gray-900">
-                                                {{ formatearMoneda(multa.valor) }}
+                                                <span>{{ formatearMoneda(multa.valor) }}</span>
+                                                <span
+                                                    v-if="Number(multa.valor || 0) <= 0"
+                                                    class="mt-1 block rounded bg-amber-100 px-1.5 py-0.5 font-sans text-[10px] font-bold text-amber-900"
+                                                >
+                                                    Revisión manual
+                                                </span>
                                             </td>
                                             <td class="whitespace-nowrap px-4 py-3">
                                                 <span
@@ -691,6 +1152,154 @@ const estadoCustodiaClases = (estado) => ({
                                 </div>
                             </form>
                         </section>
+
+                        <!-- D. TABLA DESPLEGABLE DE PAGOS Y COMPROBANTES -->
+                        <details class="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                            <summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 bg-gray-50 px-4 py-3 text-sm font-bold uppercase tracking-wide text-gray-800 hover:bg-gray-100">
+                                <span>
+                                    D. Pagos y Comprobantes ({{ (vehiculoSeleccionado.pagos_detalle || []).length }})
+                                </span>
+                                <div class="flex flex-wrap items-center gap-2 text-xs font-semibold normal-case">
+                                    <span class="font-mono text-gray-700">
+                                        Pagado: {{ formatearMoneda(vehiculoSeleccionado.total_pagado) }} / {{ formatearMoneda(vehiculoSeleccionado.costo_adquisicion) }}
+                                    </span>
+                                    <span
+                                        v-if="Number(vehiculoSeleccionado.saldo_pendiente_pago || 0) <= 0.009"
+                                        class="rounded-full bg-green-100 px-2.5 py-0.5 text-green-800"
+                                    >
+                                        ✅ Cubierto 100%
+                                    </span>
+                                    <span
+                                        v-else
+                                        class="rounded-full bg-amber-100 px-2.5 py-0.5 text-amber-900"
+                                    >
+                                        Saldo pendiente: {{ formatearMoneda(vehiculoSeleccionado.saldo_pendiente_pago) }}
+                                    </span>
+                                </div>
+                            </summary>
+
+                            <div class="space-y-4 border-t border-gray-200 p-4">
+                                <div
+                                    v-if="vehiculoSeleccionado.credito_detalle"
+                                    class="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-950"
+                                >
+                                    <p class="font-bold uppercase">Crédito asociado</p>
+                                    <div class="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                        <span><strong>Monto total:</strong> {{ formatearMoneda(vehiculoSeleccionado.credito_detalle.monto_total) }}</span>
+                                        <span><strong>Vencimiento:</strong> {{ vehiculoSeleccionado.credito_detalle.fecha_vencimiento }}</span>
+                                        <span><strong>Estado:</strong> {{ vehiculoSeleccionado.credito_detalle.estado }}</span>
+                                    </div>
+                                    <p v-if="vehiculoSeleccionado.credito_detalle.observaciones" class="mt-1 italic text-indigo-800">
+                                        "{{ vehiculoSeleccionado.credito_detalle.observaciones }}"
+                                    </p>
+                                </div>
+
+                                <div
+                                    v-if="vehiculoSeleccionado.pagos_detalle && vehiculoSeleccionado.pagos_detalle.length"
+                                    class="overflow-x-auto rounded border border-gray-200"
+                                >
+                                    <table class="min-w-full divide-y divide-gray-200 text-xs">
+                                        <thead class="bg-gray-100 text-left font-semibold uppercase tracking-wide text-gray-600">
+                                            <tr>
+                                                <th class="px-4 py-2.5">Tipo</th>
+                                                <th class="px-4 py-2.5">Fecha</th>
+                                                <th class="px-4 py-2.5 text-right">Monto</th>
+                                                <th class="px-4 py-2.5">Registrado por</th>
+                                                <th class="px-4 py-2.5 text-right">Comprobante</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-100 bg-white">
+                                            <tr v-for="pago in vehiculoSeleccionado.pagos_detalle" :key="pago.id_pago">
+                                                <td class="px-4 py-2.5 font-semibold uppercase text-gray-800">{{ pago.tipo_pago }}</td>
+                                                <td class="px-4 py-2.5 text-gray-600">{{ pago.fecha_pago }}</td>
+                                                <td class="px-4 py-2.5 text-right font-mono font-bold text-gray-900">{{ formatearMoneda(pago.monto) }}</td>
+                                                <td class="px-4 py-2.5 text-gray-600">{{ pago.registrado_por || 'N/D' }}</td>
+                                                <td class="px-4 py-2.5 text-right">
+                                                    <a
+                                                        :href="pago.comprobante_url"
+                                                        class="font-semibold text-emerald-700 hover:text-emerald-900"
+                                                    >
+                                                        Descargar comprobante
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <p v-else class="text-xs text-gray-500">
+                                    No hay comprobantes de pago registrados todavía.
+                                </p>
+
+                                <!-- FORMULARIO PARA AÑADIR OTRO COMPROBANTE / CUOTA SI QUEDA SALDO PENDIENTE -->
+                                <form
+                                    v-if="Number(vehiculoSeleccionado.saldo_pendiente_pago || 0) > 0.009"
+                                    class="space-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3"
+                                    @submit.prevent="registrarAbonoVehiculo"
+                                >
+                                    <p class="text-xs font-bold uppercase tracking-wide text-amber-900">
+                                        + Añadir otro comprobante / cuota (saldo: {{ formatearMoneda(vehiculoSeleccionado.saldo_pendiente_pago) }})
+                                    </p>
+                                    <div
+                                        v-if="abonoPagoForm.errors.monto || abonoPagoForm.errors.comprobante"
+                                        role="alert"
+                                        class="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+                                    >
+                                        <p v-if="abonoPagoForm.errors.monto">{{ abonoPagoForm.errors.monto }}</p>
+                                        <p v-if="abonoPagoForm.errors.comprobante">{{ abonoPagoForm.errors.comprobante }}</p>
+                                    </div>
+                                    <p
+                                        v-if="Number(abonoPagoForm.monto || 0) > Number(vehiculoSeleccionado.saldo_pendiente_pago || 0) + 0.009"
+                                        role="alert"
+                                        class="text-xs font-semibold text-red-700"
+                                    >
+                                        El valor ingresado excede el saldo pendiente ({{ formatearMoneda(vehiculoSeleccionado.saldo_pendiente_pago) }}).
+                                    </p>
+                                    <div class="grid grid-cols-1 items-end gap-3 sm:grid-cols-12">
+                                        <div class="sm:col-span-5">
+                                            <label class="block text-xs font-medium text-gray-700">Comprobante *</label>
+                                            <input
+                                                ref="abonoPagoInput"
+                                                type="file"
+                                                accept="image/jpeg,image/png,image/webp,.pdf"
+                                                required
+                                                class="mt-1 block w-full text-xs text-gray-600 file:mr-2 file:rounded file:border-0 file:bg-emerald-700 file:px-2.5 file:py-1 file:text-white hover:file:bg-emerald-600"
+                                                @change="abonoPagoForm.comprobante = $event.target.files[0] || null"
+                                            />
+                                        </div>
+                                        <div class="sm:col-span-3">
+                                            <label class="block text-xs font-medium text-gray-700">Valor ($) *</label>
+                                            <input
+                                                v-model="abonoPagoForm.monto"
+                                                type="number"
+                                                step="0.01"
+                                                min="0.01"
+                                                :max="vehiculoSeleccionado.saldo_pendiente_pago"
+                                                required
+                                                placeholder="0.00"
+                                                class="mt-1 block w-full rounded-md border-gray-300 font-mono text-xs shadow-sm"
+                                            />
+                                        </div>
+                                        <div class="sm:col-span-2">
+                                            <label class="block text-xs font-medium text-gray-700">Fecha</label>
+                                            <input
+                                                v-model="abonoPagoForm.fecha_pago"
+                                                type="date"
+                                                class="mt-1 block w-full rounded-md border-gray-300 text-xs shadow-sm"
+                                            />
+                                        </div>
+                                        <div class="sm:col-span-2">
+                                            <button
+                                                type="submit"
+                                                :disabled="abonoPagoForm.processing || !abonoPagoForm.comprobante || Number(abonoPagoForm.monto) <= 0 || Number(abonoPagoForm.monto) > Number(vehiculoSeleccionado.saldo_pendiente_pago || 0) + 0.009"
+                                                class="w-full rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {{ abonoPagoForm.processing ? 'Guardando...' : 'Agregar' }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                        </details>
                     </div>
 
                     <!-- Pie -->

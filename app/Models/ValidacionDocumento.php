@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class ValidacionDocumento extends Model
 {
@@ -24,6 +26,8 @@ class ValidacionDocumento extends Model
         'datos_cedula_cliente',
         'alertas_criticas',
         'estado_revision',
+        'forma_pago',
+        'id_tipo_contrato',
         'subido_por',
         'revisado_por',
         'comentario_solicitud',
@@ -57,5 +61,20 @@ class ValidacionDocumento extends Model
     public function revisor(): BelongsTo
     {
         return $this->belongsTo(User::class, 'revisado_por');
+    }
+
+    public function credito(): HasOne
+    {
+        return $this->hasOne(Credito::class, 'validacion_documento_id');
+    }
+
+    public function pagos(): HasMany
+    {
+        return $this->hasMany(PagoVehiculo::class, 'validacion_documento_id');
+    }
+
+    public function tipoContrato(): BelongsTo
+    {
+        return $this->belongsTo(TipoContrato::class, 'id_tipo_contrato', 'id_tipo_contrato');
     }
 }

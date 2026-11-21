@@ -25,6 +25,7 @@ class Vehiculo extends Model
         'id_transmision',
         'id_tipo_vehiculo',
         'id_servicio',
+        'id_tipo_contrato',
         'id_patio',
         'id_estado',
         'id_proveedor',
@@ -38,6 +39,7 @@ class Vehiculo extends Model
         'precio_venta',
         'ruta_matricula',
         'fecha_revision',
+        'fecha_caducidad_revision',
         'lugar_revision',
     ];
 
@@ -48,6 +50,7 @@ class Vehiculo extends Model
     {
         return [
             'fecha_revision' => 'datetime',
+            'fecha_caducidad_revision' => 'date:Y-m-d',
         ];
     }
 
@@ -120,5 +123,25 @@ class Vehiculo extends Model
     public function custodias(): HasMany
     {
         return $this->hasMany(CustodiaDocumentoVehiculo::class, 'id_vehiculo', 'id_vehiculo');
+    }
+
+    public function credito(): HasOne
+    {
+        return $this->hasOne(Credito::class, 'id_vehiculo', 'id_vehiculo');
+    }
+
+    public function pagos(): HasMany
+    {
+        return $this->hasMany(PagoVehiculo::class, 'id_vehiculo', 'id_vehiculo');
+    }
+
+    public function tipoContrato(): BelongsTo
+    {
+        return $this->belongsTo(TipoContrato::class, 'id_tipo_contrato', 'id_tipo_contrato');
+    }
+
+    public function documentos(): HasOne
+    {
+        return $this->hasOne(Documentos_vehiculo::class, 'id_vehiculo', 'id_vehiculo');
     }
 }

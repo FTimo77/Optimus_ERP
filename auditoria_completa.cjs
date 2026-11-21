@@ -37,13 +37,31 @@ const placa = /^([A-Z]{3})(\d{3})$/.test(placaRaw)
 
 const rutaTokenCache = path.join(__dirname, 'storage', 'app', 'autority_token.txt');
 
+function obtenerRutaNavegadorWindows() {
+    if (process.platform !== 'win32') return undefined;
+    const rutas = [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+    ];
+    for (const r of rutas) {
+        if (fs.existsSync(r)) return r;
+    }
+    return undefined;
+}
+
 (async () => {
     let browser;
     try {
-        browser = await puppeteer.launch({
+        const opcionesBrowser = {
             headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
-        });
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-blink-features=AutomationControlled']
+        };
+        const exe = obtenerRutaNavegadorWindows();
+        if (exe) opcionesBrowser.executablePath = exe;
+
+        browser = await puppeteer.launch(opcionesBrowser);
 
         const capturarFallo = (fuente, defecto = {}) => (err) => ({
             ok: false,
@@ -52,15 +70,25 @@ const rutaTokenCache = path.join(__dirname, 'storage', 'app', 'autority_token.tx
             error: err?.message || `Error inesperado al consultar ${fuente}`
         });
 
-        const [propietario, multas, sri, axis, fiscalia, fiscalia_cedula, amt, cte, atm, supa, satje] = await Promise.all([
+        // CTE (/AutoServicio) es estricto con el límite de sesiones en servicios.axiscloud.ec,
+        // mientras que AxisCloud (/CRV) no. Ejecutar CTE PRIMERO y luego Axis evita el error
+        // "Ha excedido la cantidad de sesiones permitidas".
+        const consultarCteYAxisEnSerie = async () => {
+            const resCte = await consultarMultasCTE(browser, placa)
+                .catch(capturarFallo('CTE', { placa, tiene_multas: false, cantidad: 0, total: 0, listado: [] }));
+            const resAxis = await consultarAxis(browser, placa)
+                .catch(err => ({ error_script: err?.message || 'Error en AxisCloud' }));
+            return [resAxis, resCte];
+        };
+
+        const [propietario, multas, sri, [axis, cte], fiscalia, fiscalia_cedula, amt, atm, supa, satje] = await Promise.all([
             consultarPropietario(placa).catch(capturarFallo('Propietario', { nombre: '' })),
             consultarMultas(browser, placa, rutaTokenCache).catch(err => ({ status: 'error', data: [], error: err?.message || 'Error en Autority' })),
             consultarSRI(browser, placa).catch(capturarFallo('SRI', { vehiculo: null, rubros: [], total_transferencias: 0 })),
-            consultarAxis(browser, placa).catch(err => ({ error_script: err?.message || 'Error en AxisCloud' })),
+            consultarCteYAxisEnSerie(),
             consultarFiscalia(browser, placa).catch(capturarFallo('Fiscalía', { tiene_denuncias: false, cantidad: 0, listado: [] })),
             consultarFiscaliaCedula(browser, cedula).catch(capturarFallo('Fiscalía Cédula', { consultado: false, cedula, tiene_denuncias: false, cantidad: 0, total_procesos_vista: 0, procesos_otros_roles: 0, listado: [] })),
             consultarMultasAMT(placa).catch(capturarFallo('AMT', { placa, tiene_multas: false, cantidad: 0, total: 0, listado: [] })),
-            consultarMultasCTE(browser, placa).catch(capturarFallo('CTE', { placa, tiene_multas: false, cantidad: 0, total: 0, listado: [] })),
             consultarMultasATM(placa).catch(capturarFallo('ATM', { placa, tiene_multas: false, cantidad: 0, total: 0, listado: [] })),
             consultarPensionesSUPA(cedula).catch(capturarFallo('SUPA', { consultado: false, cedula, tiene_pensiones: false, tiene_alerta: false, pagos_pendientes: 0, saldo_pendiente: 0, cantidad: 0, listado: [] })),
             consultarCausasJudiciales(cedula).catch(capturarFallo('SATJE', { consultado: false, cedula, tiene_causas: false, cantidad_demandado: 0, cantidad_actor: 0, cantidad: 0, listado: [] }))

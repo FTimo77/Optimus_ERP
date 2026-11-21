@@ -8,6 +8,7 @@ use App\Models\marca_vehiculo;
 use App\Models\pais;
 use Closure;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Carbon;
 
 class AxisCloudService
 {
@@ -80,6 +81,7 @@ class AxisCloudService
         $identificacion = $datos['lsDatosIdentificacion'] ?? [];
         $modeloInfo = $datos['lsDatosModelo'] ?? [];
         $otrasInfo = $datos['lsOtrasCaracteristicas'] ?? [];
+        $revisionInfo = is_array($datos['lsRevision'] ?? null) ? $datos['lsRevision'] : [];
 
         $servicio = trim((string) ($datos['lsServicio'] ?? ''));
 
@@ -92,6 +94,8 @@ class AxisCloudService
         $nombreClase = $extraerValor($otrasInfo, 'Clase Veh');
         $tipoVehiculo = $extraerValor($otrasInfo, 'Tipo Veh');
         $nombreColor = $extraerValor($otrasInfo, 'Color 1');
+        $fechaRevisionHastaRaw = $extraerValor($revisionInfo, 'Última Revisión Hasta');
+        $fechaCaducidadRevision = self::normalizarFechaMysql($fechaRevisionHastaRaw);
 
         $cilindraje = $extraerValor($otrasInfo, 'Cilindraje');
         if (! $cilindraje && preg_match('/\b(\d\.\d)\b/', $nombreModelo, $coincidencias)) {
@@ -114,6 +118,7 @@ class AxisCloudService
                 'cilindraje' => $cilindraje,
                 'servicio' => $servicio,
                 'tipo_vehiculo' => $tipoVehiculo,
+                'fecha_caducidad_revision' => $fechaCaducidadRevision,
                 'id_marca' => $marca ? $marca->id_marca : '',
                 'id_pais' => $pais ? $pais->id_pais : '',
                 'id_color' => $color ? $color->id_color : '',
@@ -126,5 +131,30 @@ class AxisCloudService
                 'clases' => clase_vehiculo::all(),
             ],
         ]);
+    }
+
+    public static function normalizarFechaMysql(?string $valor): ?string
+    {
+        if (! is_string($valor)) {
+            return null;
+        }
+
+        $limpio = trim($valor);
+        if ($limpio === '') {
+            return null;
+        }
+
+        foreach (['d-m-Y H:i:s', 'd-m-Y', 'd/m/Y H:i:s', 'd/m/Y', 'Y-m-d H:i:s', 'Y-m-d'] as $formato) {
+            try {
+                $fecha = Carbon::createFromFormat($formato, $limpio);
+                if ($fecha !== false) {
+                    return $fecha->format('Y-m-d');
+                }
+            } catch (\Throwable) {
+                // Intentar siguiente formato
+            }
+        }
+
+        return null;
     }
 }

@@ -33,6 +33,14 @@ Route::middleware(['auth'])->group(function () {
         ->name('vehiculos.custodia.solicitar');
     Route::patch('/vehiculos/{vehiculo}/custodia/{custodia}/recibir', [InventarioVehiculoController::class, 'confirmarRecepcionCustodia'])
         ->name('vehiculos.custodia.recibir');
+    Route::post('/vehiculos/{vehiculo}/pagos/abono', [InventarioVehiculoController::class, 'registrarAbonoPago'])
+        ->name('vehiculos.pagos.abono');
+    Route::get('/vehiculos/{vehiculo}/pagos/{pago}/comprobante', [InventarioVehiculoController::class, 'comprobantePago'])
+        ->name('vehiculos.pagos.comprobante');
+    Route::post('/vehiculos/{vehiculo}/contrato-legalizado', [InventarioVehiculoController::class, 'subirContrato'])
+        ->name('vehiculos.contrato.store');
+    Route::get('/vehiculos/{vehiculo}/contrato-legalizado', [InventarioVehiculoController::class, 'descargarContrato'])
+        ->name('vehiculos.contrato.descargar');
 
     // 2. MÓDULO DE COMPRAS / INGRESO (Para registrar adquisiciones)
     Route::get('/vehiculos/ingreso', [VehiculoIngresoController::class, 'create'])
@@ -66,6 +74,12 @@ Route::middleware(['auth'])->group(function () {
         ->name('validacion-documentos.comprobante');
     Route::post('/validacion-documentos/{validacion}/comprobante', [ValidacionDocumentosController::class, 'subirComprobante'])
         ->name('validacion-documentos.comprobante.store');
+    Route::post('/validacion-documentos/{validacion}/forma-pago', [ValidacionDocumentosController::class, 'registrarFormaPago'])
+        ->name('validacion-documentos.pago.store');
+    Route::get('/validacion-documentos/{validacion}/pagos/{pago}/comprobante', [ValidacionDocumentosController::class, 'descargarComprobantePago'])
+        ->name('validacion-documentos.pago.comprobante');
+    Route::post('/validacion-documentos/{validacion}/pagos/abono', [ValidacionDocumentosController::class, 'registrarAbonoCuota'])
+        ->name('validacion-documentos.pago.abono');
     Route::post('/validacion-documentos/{validacion}/escanear-cedula', [ValidacionDocumentosController::class, 'escanearCedula'])
         ->name('validacion-documentos.escanear.cedula');
     Route::post('/validacion-documentos/{validacion}/generar-constancia', [ValidacionDocumentosController::class, 'generarConstancia'])

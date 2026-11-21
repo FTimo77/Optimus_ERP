@@ -2,14 +2,20 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Credito;
 use App\Models\Documentos_vehiculo;
 use App\Models\estado_vehiculo as EstadoVehiculo;
 use App\Models\imagen_vehiculo as ImagenVehiculo;
+use App\Models\Movimientos_vehiculo;
+use App\Models\PagoVehiculo;
 use App\Models\Servicio;
+use App\Models\Tipo_movimiento;
+use App\Models\TipoContrato;
 use App\Models\TipoVehiculo;
 use App\Models\ValidacionDocumento;
 use App\Models\vehiculo as Vehiculo;
 use App\Services\VehiculoIngreso\AuditoriaVehicularService;
+use App\Services\VehiculoIngreso\AxisCloudService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\JsonResponse;
@@ -75,7 +81,13 @@ class ValidacionDocumentosController extends Controller
     {
         abort_unless($validacion->estado_revision !== 'borrador', 404);
 
-        $validacion->load(['subidor:id,name', 'revisor:id,name']);
+        $validacion->load([
+            'subidor:id,name',
+            'revisor:id,name',
+            'tipoContrato:id_tipo_contrato,nombre,requiere_documento',
+            'credito.registrador:id,name',
+            'pagos' => fn ($query) => $query->with('registrador:id,name')->orderBy('id_pago'),
+        ]);
 
         $datosIngresoOriginal = $validacion->datos_ingreso;
         $datosIngresoParaVista = null;
@@ -185,6 +197,27 @@ class ValidacionDocumentosController extends Controller
                 'comprobante_url' => $validacion->ruta_comprobante_pago === null
                     ? null
                     : route('validacion-documentos.comprobante', $validacion),
+                'forma_pago' => $validacion->forma_pago,
+                'id_tipo_contrato' => $validacion->id_tipo_contrato,
+                'tipo_contrato' => $validacion->tipoContrato?->nombre,
+                'costo_adquisicion' => (float) ($datosIngresoOriginal['costo_adquisicion'] ?? 0),
+                'credito' => $validacion->credito === null ? null : [
+                    'id_credito' => $validacion->credito->id_credito,
+                    'monto_total' => (float) $validacion->credito->monto_total,
+                    'fecha_vencimiento' => $validacion->credito->fecha_vencimiento?->format('Y-m-d'),
+                    'estado' => $validacion->credito->estado,
+                    'observaciones' => $validacion->credito->observaciones,
+                    'registrado_por' => $validacion->credito->registrador?->name,
+                    'created_at' => $validacion->credito->created_at?->toIso8601String(),
+                ],
+                'pagos' => $validacion->pagos->map(static fn (PagoVehiculo $pago): array => [
+                    'id_pago' => $pago->id_pago,
+                    'monto' => (float) $pago->monto,
+                    'tipo_pago' => $pago->tipo_pago,
+                    'fecha_pago' => $pago->fecha_pago?->format('Y-m-d'),
+                    'registrado_por' => $pago->registrador?->name,
+                    'comprobante_url' => route('validacion-documentos.pago.comprobante', [$validacion, $pago]),
+                ])->values(),
                 'ruta_cedula_cliente' => $validacion->ruta_cedula_cliente,
                 'datos_cedula_cliente' => $validacion->datos_cedula_cliente,
                 'ruta_contrato_generado' => $validacion->ruta_contrato_generado,
@@ -200,6 +233,9 @@ class ValidacionDocumentosController extends Controller
                 'created_at' => $validacion->created_at?->toIso8601String(),
                 'revisado_en' => $validacion->revisado_en?->toIso8601String(),
             ],
+            'tiposContrato' => TipoContrato::query()
+                ->orderBy('id_tipo_contrato')
+                ->get(['id_tipo_contrato', 'nombre', 'requiere_documento']),
             'success' => session('success'),
         ]);
     }
@@ -932,6 +968,7 @@ class ValidacionDocumentosController extends Controller
     {
         $validated = $request->validate([
             'decision' => ['required', Rule::in(['aprobada', 'rechazada'])],
+            'id_tipo_contrato' => ['required', 'integer', 'exists:tipo_contrato,id_tipo_contrato'],
             'comentario_revision' => ['nullable', 'string', 'max:2000'],
             'documento_cuv' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
         ]);
@@ -989,6 +1026,7 @@ class ValidacionDocumentosController extends Controller
 
                 $validacionBloqueada->update([
                     'estado_revision' => $nuevoEstado,
+                    'id_tipo_contrato' => (int) $validated['id_tipo_contrato'],
                     'comentario_revision' => $comentario === '' ? null : $comentario,
                     'revisado_por' => $request->user()->id,
                     'revisado_en' => now(),
@@ -1151,6 +1189,308 @@ class ValidacionDocumentosController extends Controller
             'success',
             "Comprobante de pago registrado y vehículo {$validacion->placa} incorporado al inventario. Ahora puedes generar la constancia.",
         );
+    }
+
+    public function registrarFormaPago(Request $request, ValidacionDocumento $validacion): RedirectResponse
+    {
+        $datosIngreso = is_array($validacion->datos_ingreso) ? $validacion->datos_ingreso : [];
+        $costoAdquisicion = round((float) ($datosIngreso['costo_adquisicion'] ?? 0), 2);
+
+        $formaPago = $request->validate([
+            'forma_pago' => ['required', Rule::in(['contado', 'cuotas', 'credito'])],
+        ])['forma_pago'];
+
+        $reglasEspecificas = match ($formaPago) {
+            'credito' => [
+                'fecha_vencimiento' => ['required', 'date'],
+                'observaciones' => ['nullable', 'string', 'max:1000'],
+            ],
+            'contado' => [
+                'documento_comprobante' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+                'fecha_pago' => ['nullable', 'date'],
+            ],
+            'cuotas' => [
+                'cuotas' => ['required', 'array', 'min:1'],
+                'cuotas.*.comprobante' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+                'cuotas.*.monto' => ['required', 'numeric', 'gt:0'],
+                'cuotas.*.fecha_pago' => ['nullable', 'date'],
+            ],
+        };
+
+        $validated = array_merge(
+            ['forma_pago' => $formaPago],
+            $request->validate($reglasEspecificas),
+        );
+
+        $rutasSubidas = [];
+        $pagosPreparados = [];
+
+        if ($formaPago === 'cuotas') {
+            $sumaCuotas = round(
+                array_reduce(
+                    $validated['cuotas'],
+                    static fn (float $carry, array $item): float => $carry + (float) $item['monto'],
+                    0.0,
+                ),
+                2,
+            );
+
+            if ($costoAdquisicion > 0 && $sumaCuotas > ($costoAdquisicion + 0.01)) {
+                throw ValidationException::withMessages([
+                    'cuotas' => 'La suma de las cuotas ($'.number_format($sumaCuotas, 2).') no puede exceder el costo de adquisición ($'.number_format($costoAdquisicion, 2).').',
+                ]);
+            }
+
+            foreach ($validated['cuotas'] as $index => $cuota) {
+                $archivoCuota = $request->file("cuotas.{$index}.comprobante");
+                $ruta = $archivoCuota->store("validacion-documentos/{$validacion->id}/pagos", 'local');
+                if ($ruta === false) {
+                    Storage::disk('local')->delete($rutasSubidas);
+                    throw new RuntimeException('No se pudo almacenar uno de los comprobantes de cuota.');
+                }
+
+                $rutasSubidas[] = $ruta;
+                $pagosPreparados[] = [
+                    'ruta_comprobante' => $ruta,
+                    'monto' => round((float) $cuota['monto'], 2),
+                    'tipo_pago' => 'cuota',
+                    'fecha_pago' => ! empty($cuota['fecha_pago']) ? $cuota['fecha_pago'] : now()->format('Y-m-d'),
+                ];
+            }
+        } elseif ($formaPago === 'contado') {
+            $archivoContado = $request->file('documento_comprobante');
+            $ruta = $archivoContado->store("validacion-documentos/{$validacion->id}/pagos", 'local');
+            if ($ruta === false) {
+                throw new RuntimeException('No se pudo almacenar el comprobante de pago de contado.');
+            }
+
+            $rutasSubidas[] = $ruta;
+            $pagosPreparados[] = [
+                'ruta_comprobante' => $ruta,
+                'monto' => $costoAdquisicion,
+                'tipo_pago' => 'contado',
+                'fecha_pago' => ! empty($validated['fecha_pago']) ? $validated['fecha_pago'] : now()->format('Y-m-d'),
+            ];
+        }
+
+        $rutasImagenesPublicas = [];
+        $rutasImagenesTemporales = [];
+
+        try {
+            DB::transaction(function () use (
+                $request,
+                $validacion,
+                $formaPago,
+                $validated,
+                $costoAdquisicion,
+                $pagosPreparados,
+                &$rutasImagenesPublicas,
+                &$rutasImagenesTemporales,
+            ): void {
+                $validacionBloqueada = ValidacionDocumento::query()
+                    ->whereKey($validacion->getKey())
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                abort_unless(
+                    $validacionBloqueada->estado_revision === 'pendiente_comprobante',
+                    409,
+                    'Este expediente no está pendiente de registro de forma de pago.',
+                );
+
+                if ($pagosPreparados !== []) {
+                    $validacionBloqueada->update([
+                        'ruta_comprobante_pago' => $pagosPreparados[0]['ruta_comprobante'],
+                    ]);
+                }
+
+                $rutasImagenesTemporales = $this->crearVehiculoDesdeExpediente(
+                    $validacionBloqueada,
+                    $rutasImagenesPublicas,
+                );
+
+                $estadoInventario = EstadoVehiculo::firstOrCreate(['nombre' => 'En Inventario']);
+                Vehiculo::query()
+                    ->whereKey($validacionBloqueada->placa)
+                    ->update(['id_estado' => $estadoInventario->id_estado]);
+
+                if ($formaPago === 'credito') {
+                    Credito::create([
+                        'validacion_documento_id' => $validacionBloqueada->id,
+                        'id_vehiculo' => $validacionBloqueada->placa,
+                        'monto_total' => $costoAdquisicion,
+                        'fecha_vencimiento' => $validated['fecha_vencimiento'],
+                        'estado' => 'pendiente',
+                        'observaciones' => trim((string) ($validated['observaciones'] ?? '')) ?: null,
+                        'registrado_por' => $request->user()->id,
+                    ]);
+                } else {
+                    foreach ($pagosPreparados as $pagoData) {
+                        PagoVehiculo::create([
+                            'validacion_documento_id' => $validacionBloqueada->id,
+                            'id_vehiculo' => $validacionBloqueada->placa,
+                            'ruta_comprobante' => $pagoData['ruta_comprobante'],
+                            'monto' => $pagoData['monto'],
+                            'tipo_pago' => $pagoData['tipo_pago'],
+                            'fecha_pago' => $pagoData['fecha_pago'],
+                            'registrado_por' => $request->user()->id,
+                        ]);
+                    }
+                }
+
+                $tipoMovimiento = Tipo_movimiento::firstOrCreate(['nombre' => 'Ingreso a Inventario']);
+                $etiquetaPago = match ($formaPago) {
+                    'contado' => 'Contado',
+                    'cuotas' => 'Cuotas ('.count($pagosPreparados).' abono(s))',
+                    'credito' => 'Crédito (vence '.$validated['fecha_vencimiento'].')',
+                };
+
+                Movimientos_vehiculo::create([
+                    'id_vehiculo' => $validacionBloqueada->placa,
+                    'id_tipo_movimiento' => $tipoMovimiento->id_tipo_movimiento,
+                    'id_usuario' => $request->user()->id,
+                    'descripcion' => sprintf(
+                        'Ingreso efectivo al inventario · Forma de pago: %s · Costo de adquisición: $%s.',
+                        $etiquetaPago,
+                        number_format($costoAdquisicion, 2, '.', ','),
+                    ),
+                    'fecha_movimiento' => now(),
+                ]);
+
+                $validacionBloqueada->update([
+                    'estado_revision' => 'aprobada',
+                    'forma_pago' => $formaPago,
+                ]);
+            });
+        } catch (Throwable $exception) {
+            if ($rutasImagenesPublicas !== []) {
+                Storage::disk('public')->delete($rutasImagenesPublicas);
+            }
+
+            if ($rutasSubidas !== []) {
+                Storage::disk('local')->delete($rutasSubidas);
+            }
+
+            throw $exception;
+        }
+
+        if ($rutasImagenesTemporales !== []
+            && ! Storage::disk('local')->delete($rutasImagenesTemporales)) {
+            Log::warning('Approved vehicle images could not be removed from temporary storage.', [
+                'validacion_id' => $validacion->id,
+                'image_paths' => $rutasImagenesTemporales,
+            ]);
+        }
+
+        return back()->with(
+            'success',
+            "Forma de pago registrada ({$formaPago}), vehículo {$validacion->placa} incorporado al inventario y movimiento asentado en Kardex.",
+        );
+    }
+
+    public function descargarComprobantePago(ValidacionDocumento $validacion, PagoVehiculo $pago): StreamedResponse
+    {
+        abort_unless(
+            $pago->validacion_documento_id === $validacion->id
+                && Storage::disk('local')->exists($pago->ruta_comprobante),
+            404,
+        );
+
+        $extension = pathinfo($pago->ruta_comprobante, PATHINFO_EXTENSION);
+        $nombreDescarga = $extension !== ''
+            ? "comprobante-pago-{$validacion->placa}-{$pago->id_pago}.{$extension}"
+            : "comprobante-pago-{$validacion->placa}-{$pago->id_pago}";
+
+        return Storage::disk('local')->download(
+            $pago->ruta_comprobante,
+            $nombreDescarga,
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
+    }
+
+    public function registrarAbonoCuota(Request $request, ValidacionDocumento $validacion): RedirectResponse
+    {
+        abort_unless(
+            $validacion->estado_revision === 'aprobada',
+            409,
+            'Solo se pueden agregar cuotas adicionales en expedientes ya ingresados al inventario.',
+        );
+
+        $validated = $request->validate([
+            'comprobante' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'monto' => ['required', 'numeric', 'gt:0'],
+            'fecha_pago' => ['nullable', 'date'],
+        ]);
+
+        $datosIngreso = is_array($validacion->datos_ingreso) ? $validacion->datos_ingreso : [];
+        $costoAdquisicion = round((float) ($datosIngreso['costo_adquisicion'] ?? 0), 2);
+        $montoNuevo = round((float) $validated['monto'], 2);
+
+        $ruta = $request->file('comprobante')->store("validacion-documentos/{$validacion->id}/pagos", 'local');
+        if ($ruta === false) {
+            throw new RuntimeException('No se pudo almacenar el comprobante de la cuota.');
+        }
+
+        try {
+            DB::transaction(function () use ($request, $validacion, $validated, $costoAdquisicion, $montoNuevo, $ruta): void {
+                $validacionBloqueada = ValidacionDocumento::query()
+                    ->whereKey($validacion->getKey())
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $pagadoActual = round((float) PagoVehiculo::query()
+                    ->where(function ($q) use ($validacionBloqueada): void {
+                        $q->where('validacion_documento_id', $validacionBloqueada->id)
+                            ->orWhere('id_vehiculo', $validacionBloqueada->placa);
+                    })
+                    ->sum('monto'), 2);
+
+                if ($costoAdquisicion > 0 && ($pagadoActual + $montoNuevo) > ($costoAdquisicion + 0.01)) {
+                    $saldo = max(0, round($costoAdquisicion - $pagadoActual, 2));
+                    throw ValidationException::withMessages([
+                        'monto' => 'El abono ($'.number_format($montoNuevo, 2).') excede el saldo pendiente ($'.number_format($saldo, 2).').',
+                    ]);
+                }
+
+                PagoVehiculo::create([
+                    'validacion_documento_id' => $validacionBloqueada->id,
+                    'id_vehiculo' => $validacionBloqueada->placa,
+                    'ruta_comprobante' => $ruta,
+                    'monto' => $montoNuevo,
+                    'tipo_pago' => 'cuota',
+                    'fecha_pago' => ! empty($validated['fecha_pago']) ? $validated['fecha_pago'] : now()->format('Y-m-d'),
+                    'registrado_por' => $request->user()->id,
+                ]);
+
+                if ($costoAdquisicion > 0 && ($pagadoActual + $montoNuevo) >= ($costoAdquisicion - 0.01)) {
+                    Credito::query()
+                        ->where('id_vehiculo', $validacionBloqueada->placa)
+                        ->where('estado', 'pendiente')
+                        ->update(['estado' => 'pagado']);
+                }
+
+                if (Vehiculo::query()->whereKey($validacionBloqueada->placa)->exists()) {
+                    $tipoMovimiento = Tipo_movimiento::firstOrCreate(['nombre' => 'Abono de Pago']);
+                    Movimientos_vehiculo::create([
+                        'id_vehiculo' => $validacionBloqueada->placa,
+                        'id_tipo_movimiento' => $tipoMovimiento->id_tipo_movimiento,
+                        'id_usuario' => $request->user()->id,
+                        'descripcion' => sprintf(
+                            'Registro de cuota/abono por $%s (acumulado: $%s / $%s).',
+                            number_format($montoNuevo, 2, '.', ','),
+                            number_format($pagadoActual + $montoNuevo, 2, '.', ','),
+                            number_format($costoAdquisicion, 2, '.', ','),
+                        ),
+                        'fecha_movimiento' => now(),
+                    ]);
+                }
+            });
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($ruta);
+            throw $exception;
+        }
+
+        return back()->with('success', 'Cuota y comprobante registrados correctamente.');
     }
 
     public function escanearCedula(Request $request, ValidacionDocumento $validacion): JsonResponse
@@ -1751,6 +2091,7 @@ class ValidacionDocumentosController extends Controller
             'servicio' => ['nullable', 'string', 'max:100'],
             'tipo_vehiculo' => ['nullable', 'string', 'max:100'],
             'ultima_fecha_revision' => ['nullable', 'date_format:d-m-Y H:i:s'],
+            'fecha_caducidad_revision' => ['nullable', 'date_format:Y-m-d'],
             'lugar_revision' => ['nullable', 'string', 'max:150'],
             'kilometraje' => ['nullable', 'integer', 'min:0'],
             'costo_adquisicion' => ['required', 'numeric', 'min:0'],
@@ -1807,14 +2148,25 @@ class ValidacionDocumentosController extends Controller
         $atributosVehiculo['id_servicio'] = $servicio === null
             ? null
             : Servicio::firstOrCreate(['nombre' => $servicio])->id_servicio;
+        $atributosVehiculo['id_tipo_contrato'] = $validacion->id_tipo_contrato;
         $atributosVehiculo['fecha_revision'] = $fechaRevision === null
             ? null
             : Carbon::createFromFormat('d-m-Y H:i:s', $fechaRevision)->format('Y-m-d H:i:s');
+        $atributosVehiculo['fecha_caducidad_revision'] = $datosValidados['fecha_caducidad_revision']
+            ?? AxisCloudService::normalizarFechaMysql(
+                $validacion->datos_oficiales['fecha_caducidad_revision']
+                    ?? $validacion->datos_oficiales['fecha_ultima_revision_hasta']
+                    ?? null,
+            );
         $atributosVehiculo['lugar_revision'] = $datosValidados['lugar_revision'] ?? null;
 
         $vehiculo = Vehiculo::create($atributosVehiculo);
 
         $documentosVehiculo = ['id_vehiculo' => $vehiculo->id_vehiculo];
+
+        if ($validacion->id_tipo_contrato !== null) {
+            $documentosVehiculo['id_tipo_contrato'] = $validacion->id_tipo_contrato;
+        }
 
         if ($validacion->ruta_documento !== null) {
             $documentosVehiculo['ruta_matricula'] = $validacion->ruta_documento;

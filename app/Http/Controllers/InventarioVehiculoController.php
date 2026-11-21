@@ -2,9 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Credito;
 use App\Models\CustodiaDocumentoVehiculo;
+use App\Models\Documentos_vehiculo;
+use App\Models\Movimientos_vehiculo;
 use App\Models\MultaVehiculo;
+use App\Models\PagoVehiculo;
 use App\Models\Patio;
+use App\Models\Tipo_movimiento;
 use App\Models\User;
 use App\Models\ValidacionDocumento;
 use App\Models\Vehiculo;
@@ -34,6 +39,8 @@ class InventarioVehiculoController extends Controller
             'transmision',
             'tipoVehiculo',
             'servicio',
+            'tipoContrato',
+            'documentos',
             'patio',
             'estado',
             'proveedor',
@@ -43,7 +50,7 @@ class InventarioVehiculoController extends Controller
         $placas = $vehiculos->pluck('id_vehiculo')->all();
 
         $validacionesPorPlaca = ValidacionDocumento::query()
-            ->with('subidor:id,name')
+            ->with(['subidor:id,name', 'tipoContrato:id_tipo_contrato,nombre,requiere_documento'])
             ->whereIn('placa', $placas)
             ->orderByDesc('id')
             ->get()
@@ -60,6 +67,8 @@ class InventarioVehiculoController extends Controller
                 'patioDestino:id_patio,nombre',
                 'patioActual:id_patio,nombre',
             ])->orderByDesc('id_custodia'),
+            'credito.registrador:id,name',
+            'pagos' => fn ($query) => $query->with('registrador:id,name')->orderBy('id_pago'),
         ]);
 
         $vehiculos->each(function (Vehiculo $vehiculo) use ($validacionesPorPlaca): void {
@@ -125,6 +134,51 @@ class InventarioVehiculoController extends Controller
             }
 
             $vehiculo->setAttribute('custodia_actual', $custodiaActual);
+
+            $pagosDetalle = $vehiculo->pagos->map(static fn (PagoVehiculo $pago): array => [
+                'id_pago' => $pago->id_pago,
+                'monto' => (float) $pago->monto,
+                'tipo_pago' => $pago->tipo_pago,
+                'fecha_pago' => $pago->fecha_pago?->format('Y-m-d'),
+                'registrado_por' => $pago->registrador?->name,
+                'comprobante_url' => route('vehiculos.pagos.comprobante', [$vehiculo->id_vehiculo, $pago->id_pago]),
+            ])->values();
+
+            $costoAdq = round((float) ($vehiculo->costo_adquisicion ?? 0), 2);
+            $totalPagado = round((float) $pagosDetalle->sum('monto'), 2);
+            $saldoPendientePago = max(0.0, round($costoAdq - $totalPagado, 2));
+
+            $vehiculo->setAttribute('forma_pago', $validacion?->forma_pago ?? ($vehiculo->credito ? 'credito' : ($pagosDetalle->isNotEmpty() ? $pagosDetalle->first()['tipo_pago'] : null)));
+            $vehiculo->setAttribute('pagos_detalle', $pagosDetalle);
+            $vehiculo->setAttribute('total_pagado', $totalPagado);
+            $vehiculo->setAttribute('saldo_pendiente_pago', $saldoPendientePago);
+            $vehiculo->setAttribute('credito_detalle', $vehiculo->credito === null ? null : [
+                'id_credito' => $vehiculo->credito->id_credito,
+                'monto_total' => (float) $vehiculo->credito->monto_total,
+                'fecha_vencimiento' => $vehiculo->credito->fecha_vencimiento?->format('Y-m-d'),
+                'estado' => $vehiculo->credito->estado,
+                'observaciones' => $vehiculo->credito->observaciones,
+                'registrado_por' => $vehiculo->credito->registrador?->name,
+            ]);
+
+            $tipoContrato = $vehiculo->tipoContrato ?? $validacion?->tipoContrato;
+            $tipoContratoNombre = $tipoContrato?->nombre;
+            $requiereDocContrato = $tipoContrato !== null
+                ? (bool) $tipoContrato->requiere_documento
+                : false;
+            $rutaContratoDoc = $vehiculo->documentos?->ruta_contrato;
+            $tieneContratoCargado = is_string($rutaContratoDoc)
+                && trim($rutaContratoDoc) !== ''
+                && (Storage::disk('local')->exists($rutaContratoDoc) || Storage::disk('public')->exists($rutaContratoDoc));
+
+            $vehiculo->setAttribute('tipo_contrato_nombre', $tipoContratoNombre);
+            $vehiculo->setAttribute('requiere_documento_contrato', $requiereDocContrato);
+            $vehiculo->setAttribute('tiene_contrato_cargado', $tieneContratoCargado);
+            $vehiculo->setAttribute('contrato_pendiente', $requiereDocContrato && ! $tieneContratoCargado);
+            $vehiculo->setAttribute(
+                'contrato_archivo_url',
+                $tieneContratoCargado ? route('vehiculos.contrato.descargar', $vehiculo->id_vehiculo) : null,
+            );
         });
 
         $usuario = $request->user();
@@ -325,6 +379,180 @@ class InventarioVehiculoController extends Controller
         });
 
         return back()->with('success', 'Recepción confirmada y custodia asignada al patio destino de la solicitud.');
+    }
+
+    public function registrarAbonoPago(Request $request, Vehiculo $vehiculo): RedirectResponse
+    {
+        $validated = $request->validate([
+            'comprobante' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'monto' => ['required', 'numeric', 'gt:0'],
+            'fecha_pago' => ['nullable', 'date'],
+        ]);
+
+        $costoAdquisicion = round((float) ($vehiculo->costo_adquisicion ?? 0), 2);
+        $montoNuevo = round((float) $validated['monto'], 2);
+
+        $ruta = $request->file('comprobante')->store("vehiculos/{$vehiculo->id_vehiculo}/pagos", 'local');
+        if ($ruta === false) {
+            throw new RuntimeException('No se pudo almacenar el comprobante del abono.');
+        }
+
+        try {
+            DB::transaction(function () use ($request, $vehiculo, $validated, $costoAdquisicion, $montoNuevo, $ruta): void {
+                $pagadoActual = round((float) PagoVehiculo::query()
+                    ->where('id_vehiculo', $vehiculo->id_vehiculo)
+                    ->lockForUpdate()
+                    ->sum('monto'), 2);
+
+                if ($costoAdquisicion > 0 && ($pagadoActual + $montoNuevo) > ($costoAdquisicion + 0.01)) {
+                    $saldo = max(0, round($costoAdquisicion - $pagadoActual, 2));
+                    throw ValidationException::withMessages([
+                        'monto' => 'El abono ($'.number_format($montoNuevo, 2).') excede el saldo pendiente ($'.number_format($saldo, 2).').',
+                    ]);
+                }
+
+                $validacionId = ValidacionDocumento::query()
+                    ->where('placa', $vehiculo->id_vehiculo)
+                    ->orderByDesc('id')
+                    ->value('id');
+
+                PagoVehiculo::create([
+                    'validacion_documento_id' => $validacionId,
+                    'id_vehiculo' => $vehiculo->id_vehiculo,
+                    'ruta_comprobante' => $ruta,
+                    'monto' => $montoNuevo,
+                    'tipo_pago' => 'cuota',
+                    'fecha_pago' => ! empty($validated['fecha_pago']) ? $validated['fecha_pago'] : now()->format('Y-m-d'),
+                    'registrado_por' => $request->user()->id,
+                ]);
+
+                if ($costoAdquisicion > 0 && ($pagadoActual + $montoNuevo) >= ($costoAdquisicion - 0.01)) {
+                    Credito::query()
+                        ->where('id_vehiculo', $vehiculo->id_vehiculo)
+                        ->where('estado', 'pendiente')
+                        ->update(['estado' => 'pagado']);
+                }
+
+                $tipoMovimiento = Tipo_movimiento::firstOrCreate(['nombre' => 'Abono de Pago']);
+                Movimientos_vehiculo::create([
+                    'id_vehiculo' => $vehiculo->id_vehiculo,
+                    'id_tipo_movimiento' => $tipoMovimiento->id_tipo_movimiento,
+                    'id_usuario' => $request->user()->id,
+                    'descripcion' => sprintf(
+                        'Registro de cuota/abono por $%s (acumulado: $%s / $%s).',
+                        number_format($montoNuevo, 2, '.', ','),
+                        number_format($pagadoActual + $montoNuevo, 2, '.', ','),
+                        number_format($costoAdquisicion, 2, '.', ','),
+                    ),
+                    'fecha_movimiento' => now(),
+                ]);
+            });
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($ruta);
+            throw $exception;
+        }
+
+        return back()->with('success', 'Comprobante y abono registrados correctamente.');
+    }
+
+    public function comprobantePago(Vehiculo $vehiculo, PagoVehiculo $pago): StreamedResponse
+    {
+        abort_unless(
+            $pago->id_vehiculo === $vehiculo->id_vehiculo
+                && Storage::disk('local')->exists($pago->ruta_comprobante),
+            404,
+        );
+
+        $extension = pathinfo($pago->ruta_comprobante, PATHINFO_EXTENSION);
+        $nombreDescarga = $extension !== ''
+            ? "comprobante-pago-{$vehiculo->id_vehiculo}-{$pago->id_pago}.{$extension}"
+            : "comprobante-pago-{$vehiculo->id_vehiculo}-{$pago->id_pago}";
+
+        return Storage::disk('local')->download(
+            $pago->ruta_comprobante,
+            $nombreDescarga,
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
+    }
+
+    public function subirContrato(Request $request, Vehiculo $vehiculo): RedirectResponse
+    {
+        $request->validate([
+            'contrato' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:10240'],
+        ]);
+
+        // Almacenamiento privado y seguro en disco local (nunca en public)
+        $rutaContrato = $request->file('contrato')->store(
+            "documentos/contratos/{$vehiculo->id_vehiculo}",
+            'local',
+        );
+
+        if ($rutaContrato === false) {
+            throw new RuntimeException('No se pudo almacenar el contrato en el disco privado.');
+        }
+
+        $rutaAnterior = null;
+
+        try {
+            DB::transaction(function () use ($vehiculo, $rutaContrato, &$rutaAnterior): void {
+                $docExistente = Documentos_vehiculo::query()
+                    ->where('id_vehiculo', $vehiculo->id_vehiculo)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($docExistente !== null) {
+                    $rutaAnterior = $docExistente->ruta_contrato;
+                    $docExistente->update([
+                        'id_tipo_contrato' => $vehiculo->id_tipo_contrato ?? $docExistente->id_tipo_contrato,
+                        'ruta_contrato' => $rutaContrato,
+                    ]);
+                } else {
+                    Documentos_vehiculo::create([
+                        'id_vehiculo' => $vehiculo->id_vehiculo,
+                        'id_tipo_contrato' => $vehiculo->id_tipo_contrato,
+                        'ruta_contrato' => $rutaContrato,
+                    ]);
+                }
+            });
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($rutaContrato);
+            throw $exception;
+        }
+
+        if ($rutaAnterior !== null
+            && $rutaAnterior !== $rutaContrato
+            && Storage::disk('local')->exists($rutaAnterior)) {
+            Storage::disk('local')->delete($rutaAnterior);
+        }
+
+        return back()->with('success', 'Contrato guardado correctamente en almacenamiento privado.');
+    }
+
+    public function descargarContrato(Vehiculo $vehiculo): StreamedResponse
+    {
+        $documento = Documentos_vehiculo::query()
+            ->where('id_vehiculo', $vehiculo->id_vehiculo)
+            ->first();
+
+        $ruta = $documento?->ruta_contrato;
+        abort_unless(is_string($ruta) && trim($ruta) !== '', 404);
+
+        $disco = Storage::disk('local')->exists($ruta)
+            ? 'local'
+            : (Storage::disk('public')->exists($ruta) ? 'public' : null);
+
+        abort_unless($disco !== null, 404);
+
+        $extension = pathinfo($ruta, PATHINFO_EXTENSION);
+        $nombreDescarga = $extension !== ''
+            ? "contrato-{$vehiculo->id_vehiculo}.{$extension}"
+            : "contrato-{$vehiculo->id_vehiculo}";
+
+        return Storage::disk($disco)->download(
+            $ruta,
+            $nombreDescarga,
+            ['X-Content-Type-Options' => 'nosniff'],
+        );
     }
 
     /**

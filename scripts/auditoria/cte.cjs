@@ -1,5 +1,8 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const path = require('path');
+
+const RUTA_COOKIES_CTE = path.join(__dirname, '..', '..', 'storage', 'app', 'cte_cookies.json');
 
 if (!process.env.PUPPETEER_CACHE_DIR && process.platform === 'win32') {
     process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\LENOVO\\.cache\\puppeteer';
@@ -108,12 +111,33 @@ function procesarRespuestaCTE(jsonCTE, placaBuscada, debugExtra) {
     };
 }
 
-async function consultarMultasCTE(browser, placaBuscada) {
+async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
     const page = await browser.newPage();
     const urlsPostVistas = [];
     try {
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        });
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'es-EC,es;q=0.9,en;q=0.8'
+        });
+        const uaNativo = (await browser.userAgent()).replace(/HeadlessChrome/g, 'Chrome');
+        await page.setUserAgent(uaNativo);
         await page.setViewport({ width: 1366, height: 768 });
+
+        // Reutilizamos las cookies/JSESSIONID guardadas de servicios.axiscloud.ec (compatible con Puppeteer v25)
+        try {
+            if (fs.existsSync(RUTA_COOKIES_CTE)) {
+                const cookiesGuardadas = JSON.parse(fs.readFileSync(RUTA_COOKIES_CTE, 'utf8'));
+                if (Array.isArray(cookiesGuardadas) && cookiesGuardadas.length > 0) {
+                    if (typeof browser.setCookie === 'function') {
+                        await browser.setCookie(...cookiesGuardadas);
+                    } else if (typeof page.setCookie === 'function') {
+                        await page.setCookie(...cookiesGuardadas);
+                    }
+                }
+            }
+        } catch (e) {}
 
         let resuelto = false;
         let resolvePromesa;
@@ -188,6 +212,24 @@ async function consultarMultasCTE(browser, placaBuscada) {
         await frameConsulta.click('#boton_buscar');
 
         const rawJson = await promesaJson;
+
+        // Guardamos las cookies vigentes de AxisCloud (compatible con Puppeteer v25) solo si la consulta fue válida
+        try {
+            const esErrorSesion = /sesiones permitidas/i.test(String(rawJson?.lsError || ''));
+            if (esErrorSesion) {
+                if (fs.existsSync(RUTA_COOKIES_CTE)) fs.unlinkSync(RUTA_COOKIES_CTE);
+            } else {
+                const todas = typeof browser.cookies === 'function'
+                    ? await browser.cookies()
+                    : await page.cookies('https://servicios.axiscloud.ec');
+                const cookiesAxis = (todas || []).filter(c => String(c.domain || '').includes('axiscloud.ec'));
+                if (cookiesAxis.length > 0) {
+                    fs.mkdirSync(path.dirname(RUTA_COOKIES_CTE), { recursive: true });
+                    fs.writeFileSync(RUTA_COOKIES_CTE, JSON.stringify(cookiesAxis, null, 2), 'utf8');
+                }
+            }
+        } catch (e) {}
+
         return procesarRespuestaCTE(rawJson, placaBuscada, { posts: urlsPostVistas });
     } catch (e) {
         return {
@@ -203,6 +245,18 @@ async function consultarMultasCTE(browser, placaBuscada) {
     } finally {
         await page.close().catch(() => {});
     }
+}
+
+async function consultarMultasCTE(browser, placaBuscada) {
+    let resultado = await ejecutarConsultaCTEUnIntento(browser, placaBuscada);
+
+    // Reintentar solo ante errores transitorios de red/DNS (no ante límite de sesiones)
+    if (!resultado.ok && /ERR_NAME_NOT_RESOLVED|ERR_NETWORK_CHANGED|ERR_CONNECTION_RESET/i.test(String(resultado.error || ''))) {
+        await new Promise(r => setTimeout(r, 2000));
+        resultado = await ejecutarConsultaCTEUnIntento(browser, placaBuscada);
+    }
+
+    return resultado;
 }
 
 if (require.main === module) {

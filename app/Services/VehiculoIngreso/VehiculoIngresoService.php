@@ -68,6 +68,7 @@ class VehiculoIngresoService
                 'max:100',
                 ...($validacionAuditoria !== null ? ['date_format:d-m-Y H:i:s'] : []),
             ],
+            'fecha_caducidad_revision' => ['nullable', 'date_format:Y-m-d'],
             'lugar_revision' => [
                 $validacionAuditoria !== null ? 'required' : 'nullable',
                 'string',
@@ -318,6 +319,11 @@ class VehiculoIngresoService
             'cilindraje' => $valorAxis('cilindraje', 'cilindraje'),
             'tipo_vehiculo' => trim((string) ($datosOficiales['tipo_vehiculo'] ?? '')) ?: null,
             'servicio' => trim((string) ($datosOficiales['servicio'] ?? '')) ?: null,
+            'fecha_caducidad_revision' => AxisCloudService::normalizarFechaMysql(
+                $datosOficiales['fecha_caducidad_revision']
+                    ?? $datosOficiales['fecha_ultima_revision_hasta']
+                    ?? null,
+            ) ?? $request->input('fecha_caducidad_revision'),
         ];
     }
 

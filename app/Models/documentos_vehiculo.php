@@ -9,6 +9,7 @@ class Documentos_vehiculo extends Model
     protected $primaryKey = 'id_documento_vehiculo';
     protected $fillable = [
         'id_vehiculo',
+        'id_tipo_contrato',
         'ruta_contrato',
         'ruta_matricula',
         'ruta_cuv',
@@ -22,5 +23,10 @@ class Documentos_vehiculo extends Model
     public function vehiculo()
     {
         return $this->belongsTo(Vehiculo::class, 'id_vehiculo', 'id_vehiculo');
+    }
+
+    public function tipoContrato()
+    {
+        return $this->belongsTo(TipoContrato::class, 'id_tipo_contrato', 'id_tipo_contrato');
     }
 }

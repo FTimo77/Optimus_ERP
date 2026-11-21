@@ -10,7 +10,7 @@ class Movimientos_vehiculo extends Model
     protected $fillable = [
         'id_vehiculo',
         'id_tipo_movimiento',
-        'id_user',
+        'id_usuario',
         'id_cliente',
         'descripcion',
         'fecha_movimiento'
@@ -28,7 +28,7 @@ class Movimientos_vehiculo extends Model
 
     function user()
     {
-        return $this->belongsTo(User::class, 'id_user', 'id');
+        return $this->belongsTo(User::class, 'id_usuario', 'id');
     }
 
     function cliente()

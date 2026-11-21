@@ -36,6 +36,7 @@ const form = useForm({
     validacion_id: null,
     comentario_solicitud: '',
     ultima_fecha_revision: '',
+    fecha_caducidad_revision: '',
     lugar_revision: '',
     documento_matricula: null,
     id_marca: '',
@@ -110,6 +111,7 @@ const buscarPorPlaca = async () => {
             if (v.id_clase) form.id_clase = v.id_clase;
             if (v.servicio) form.servicio = v.servicio;
             if (v.tipo_vehiculo) form.tipo_vehiculo = v.tipo_vehiculo;
+            if (v.fecha_caducidad_revision) form.fecha_caducidad_revision = v.fecha_caducidad_revision;
 
             tipoMensaje.value = 'exito';
             mensajePlaca.value = '¡Datos del vehículo cargados automáticamente! Completa los campos restantes.';
@@ -140,6 +142,7 @@ const enviarFormulario = () => {
             camposAxisPendientes.value = [];
             errorAuditoria.value = '';
             puedeEnviarRevisionManual.value = false;
+            modoIngresoManual.value = false;
         },
     });
 };
@@ -148,6 +151,7 @@ const escanerRef = ref(null);
 const resultadoAuditoria = ref(null);
 const errorAuditoria = ref('');
 const puedeEnviarRevisionManual = ref(false);
+const modoIngresoManual = ref(false);
 const camposAxisPendientes = ref([]);
 const camposAxisFormulario = [
     { key: 'id_vehiculo', label: 'Placa', field: 'placa' },
@@ -171,8 +175,21 @@ const camposAxisInformativos = computed(() => [
 ].filter(({ key }) => !camposAxisPendientes.value.includes(key)));
 const mostrarFormularioIngreso = computed(() =>
     categoriaSeleccionada.value === 'empresa'
-    || (categoriaSeleccionada.value === 'particular' && Boolean(errorAuditoria.value)),
+    || (categoriaSeleccionada.value === 'particular' && (Boolean(errorAuditoria.value) || modoIngresoManual.value)),
 );
+
+const toggleIngresoManual = () => {
+    modoIngresoManual.value = !modoIngresoManual.value;
+    if (modoIngresoManual.value) {
+        errorAuditoria.value = '';
+        resultadoAuditoria.value = null;
+        puedeEnviarRevisionManual.value = false;
+        camposAxisPendientes.value = [];
+        form.validacion_id = null;
+        form.documento_matricula = null;
+        form.clearErrors();
+    }
+};
 
 watch(categoriaSeleccionada, (nuevaCategoria) => {
     form.categoria_ingreso = nuevaCategoria;
@@ -182,6 +199,7 @@ watch(categoriaSeleccionada, (nuevaCategoria) => {
     errorAuditoria.value = '';
     resultadoAuditoria.value = null;
     puedeEnviarRevisionManual.value = false;
+    modoIngresoManual.value = false;
     camposAxisPendientes.value = [];
     mensajePlaca.value = '';
 });
@@ -201,6 +219,7 @@ const onArchivoMatriculaSeleccionado = () => {
 
 const onAuditoriaExitosa = (data) => {
     errorAuditoria.value = '';
+    modoIngresoManual.value = false;
     resultadoAuditoria.value = data;
     form.validacion_id = data.validacion_id;
     const camposDisponibles = new Set(camposAxisFormulario.map(({ key }) => key));
@@ -213,6 +232,9 @@ const onAuditoriaExitosa = (data) => {
     form.ultima_fecha_revision = data.ultima_fecha_revision
         || data.datos_oficiales?.ultima_fecha_revision
         || data.datos_oficiales?.fecha_ultima_revision_desde
+        || '';
+    form.fecha_caducidad_revision = data.fecha_caducidad_revision
+        || data.datos_oficiales?.fecha_caducidad_revision
         || '';
     form.lugar_revision = '';
     if (camposAxisPendientes.value.includes('id_vehiculo')) {
@@ -295,6 +317,15 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                     @success="onAuditoriaExitosa"
                     @error="onAuditoriaError"
                 >
+                    <template #actions>
+                        <button
+                            type="button"
+                            class="whitespace-nowrap rounded border border-slate-500 bg-slate-800 px-4 py-2 text-xs font-semibold text-gray-100 shadow transition hover:bg-slate-700"
+                            @click="toggleIngresoManual"
+                        >
+                            {{ modoIngresoManual ? 'Ocultar ingreso manual' : 'Ingreso manual' }}
+                        </button>
+                    </template>
                     <template #error-extra>
                         <div
                             v-if="puedeEnviarRevisionManual"
@@ -487,7 +518,9 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                                                 : '✅ Sin Multas de Tránsito (Autority)' }}
                                     </h5>
                                     <p class="text-[11px] text-gray-300 mt-0.5">
-                                        {{ resultadoAuditoria.multas?.mensaje || 'Fuente oficial: Autority' }}
+                                        {{ resultadoAuditoria.multas?.ok && resultadoAuditoria.multas?.tiene_multas && Number(resultadoAuditoria.multas?.total || 0) <= 0
+                                            ? 'Multa detectada con valor $0.00: es necesaria revisión manual.'
+                                            : (resultadoAuditoria.multas?.mensaje || 'Fuente oficial: Autority') }}
                                     </p>
                                 </div>
 
@@ -495,6 +528,10 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                                 <span v-if="!resultadoAuditoria.multas?.ok"
                                     class="px-2.5 py-1 rounded bg-amber-900/70 text-amber-300 text-xs font-bold uppercase">
                                     No disponible
+                                </span>
+                                <span v-else-if="resultadoAuditoria.multas?.tiene_multas && Number(resultadoAuditoria.multas?.total || 0) <= 0"
+                                    class="px-2.5 py-1 rounded bg-amber-900/80 text-amber-200 text-xs font-bold uppercase whitespace-nowrap">
+                                    Revisión manual ($0.00)
                                 </span>
                                 <span v-else
                                     class="text-lg font-extrabold font-mono"
@@ -507,7 +544,12 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                                 class="mt-3 space-y-1.5 max-h-40 overflow-y-auto text-[11px] border-t border-red-800/60 pt-2">
                                 <li v-for="(m, idx) in resultadoAuditoria.multas.listado" :key="idx" class="flex justify-between gap-2 text-gray-200">
                                     <span class="truncate">{{ m.fecha }} ({{ m.entidad }}): {{ m.descripcion }}</span>
-                                    <span class="font-bold text-red-300 whitespace-nowrap">${{ Number(m.total).toFixed(2) }}</span>
+                                    <span
+                                        class="font-bold whitespace-nowrap"
+                                        :class="Number(m.total || 0) <= 0 ? 'text-amber-300' : 'text-red-300'"
+                                    >
+                                        {{ Number(m.total || 0) <= 0 ? 'Revisión manual ($0.00)' : `$${Number(m.total).toFixed(2)}` }}
+                                    </span>
                                 </li>
                             </ul>
                         </div>
@@ -598,7 +640,9 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                                             <p class="mt-0.5 text-[11px] text-gray-300">
                                                 {{ !fuente.data?.ok
                                                     ? (fuente.data?.error || fuente.data?.mensaje || 'No se pudo consultar esta entidad.')
-                                                    : (fuente.data?.mensaje || `Fuente directa: ${fuente.titulo}`) }}
+                                                    : fuente.data?.tiene_multas && Number(fuente.data?.total || 0) <= 0
+                                                        ? 'Multa detectada con valor $0.00: es necesaria revisión manual.'
+                                                        : (fuente.data?.mensaje || `Fuente directa: ${fuente.titulo}`) }}
                                             </p>
                                             <p
                                                 v-if="fuente.key === 'cte' && fuente.data?.ok && (fuente.data?.historico_pagadas > 0 || fuente.data?.historico_anuladas > 0)"
@@ -621,6 +665,12 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                                             No disponible
                                         </span>
                                         <span
+                                            v-else-if="fuente.data?.tiene_multas && Number(fuente.data?.total || 0) <= 0"
+                                            class="shrink-0 rounded bg-amber-900/80 px-2.5 py-1 text-xs font-bold uppercase text-amber-200"
+                                        >
+                                            Revisión manual ($0.00)
+                                        </span>
+                                        <span
                                             v-else
                                             class="shrink-0 font-mono text-lg font-extrabold"
                                             :class="fuente.data?.tiene_multas ? 'text-red-400' : 'text-green-400'"
@@ -641,8 +691,11 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                                             <span class="truncate">
                                                 {{ m.fecha ? `${m.fecha} · ` : '' }}{{ m.citacion ? `[${m.citacion}] ` : '' }}{{ m.descripcion }}
                                             </span>
-                                            <span class="whitespace-nowrap font-bold text-red-300">
-                                                ${{ Number(m.total || 0).toFixed(2) }}
+                                            <span
+                                                class="whitespace-nowrap font-bold"
+                                                :class="Number(m.total || 0) <= 0 ? 'text-amber-300' : 'text-red-300'"
+                                            >
+                                                {{ Number(m.total || 0) <= 0 ? 'Revisión manual ($0.00)' : `$${Number(m.total || 0).toFixed(2)}` }}
                                             </span>
                                         </li>
                                     </ul>
@@ -1153,7 +1206,7 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                                     v-model="form.id_vehiculo"
                                     @keyup.enter="buscarPorPlaca"
                                     type="text"
-                                    placeholder="Placa (ej. PFI0582)"
+                                    placeholder="Placa (ej. PFY2582)"
                                     :disabled="cargandoPlaca"
                                     aria-label="Placa del vehículo"
                                     required

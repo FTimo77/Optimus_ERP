@@ -141,6 +141,7 @@ defineExpose({ reset });
                 >
                     {{ escaneandoIA ? 'Auditando IA + 4 Fuentes Web...' : textoBoton }}
                 </button>
+                <slot name="actions" />
             </div>
         </div>
 
