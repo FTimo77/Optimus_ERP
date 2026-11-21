@@ -331,11 +331,57 @@ const patiosDisponibles = computed(() => {
     return Array.from(unicos).sort((a, b) => a.localeCompare(b, 'es'));
 });
 
-const tieneAlertaVehiculo = (auto) => {
-    const tieneMultas = Number(auto.multas_pendientes_count || 0) > 0;
-    const estadoRtv = estadoCaducidadRtv(auto.fecha_caducidad_revision).estado;
-    return tieneMultas || estadoRtv === 'vencida' || estadoRtv === 'proxima' || Boolean(auto.contrato_pendiente);
+const documentosFaltantes = (auto) => {
+    const faltantes = [];
+    const custodias = Array.isArray(auto.custodia_actual) ? auto.custodia_actual : [];
+    const estadoItem = (clave) => custodias.find((c) => c.item === clave)?.estado || 'sin_asignar';
+
+    // 1. Entrega-recepción de Matrícula
+    const estadoMatricula = estadoItem('matricula');
+    if (estadoMatricula === 'pendiente_recepcion') {
+        faltantes.push({ texto: 'Matrícula (pend. recibir)', severidad: 'amber' });
+    } else if (estadoMatricula !== 'recibido') {
+        faltantes.push({ texto: 'Matrícula', severidad: 'red' });
+    }
+
+    // 2. Entrega-recepción y vigencia de RTV
+    const estadoRtvCustodia = estadoItem('rtv');
+    const rtv = estadoCaducidadRtv(auto.fecha_caducidad_revision);
+    if (rtv.estado === 'vencida') {
+        faltantes.push({ texto: 'RTV vencida', severidad: 'red' });
+    } else if (estadoRtvCustodia === 'pendiente_recepcion') {
+        faltantes.push({ texto: 'RTV (pend. recibir)', severidad: 'amber' });
+    } else if (estadoRtvCustodia !== 'recibido') {
+        faltantes.push({ texto: 'RTV', severidad: 'red' });
+    } else if (rtv.estado === 'proxima') {
+        faltantes.push({ texto: 'RTV por vencer', severidad: 'amber' });
+    }
+
+    // 3. Archivo y entrega-recepción de Contrato (se omite únicamente si es Firma directa)
+    const tipoContratoNombre = (auto.tipo_contrato?.nombre || auto.tipo_contrato_nombre || '').trim().toLowerCase();
+    const esFirmaDirecta = tipoContratoNombre === 'firma directa' || auto.requiere_documento_contrato === false;
+    if (!esFirmaDirecta) {
+        const estadoContrato = estadoItem('contrato_legalizado');
+        if (auto.contrato_pendiente) {
+            faltantes.push({ texto: 'Contrato (sin archivo)', severidad: 'amber' });
+        } else if (estadoContrato === 'pendiente_recepcion') {
+            faltantes.push({ texto: 'Contrato (pend. recibir)', severidad: 'amber' });
+        } else if (estadoContrato !== 'recibido') {
+            faltantes.push({ texto: 'Contrato', severidad: 'red' });
+        }
+    }
+
+    return faltantes;
 };
+
+const tieneAlertaPagosMultas = (auto) => {
+    const tieneMultas = Number(auto.multas_pendientes_count || 0) > 0;
+    const tieneSaldoPendiente = Number(auto.saldo_pendiente_pago || 0) > 0.009;
+    return tieneMultas || Boolean(auto.credito_vencido) || tieneSaldoPendiente;
+};
+
+const tieneAlertaVehiculo = (auto) =>
+    tieneAlertaPagosMultas(auto) || documentosFaltantes(auto).length > 0;
 
 const hayFiltrosActivos = computed(() => Boolean(
     busqueda.value.trim()
@@ -518,14 +564,16 @@ const vehiculosFiltrados = computed(() => {
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-900 text-white">
                                 <tr>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Placa</th>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Marca</th>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Modelo</th>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Año / Color</th>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Alertas</th>
-                                    <th class="px-6 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Estado</th>
-                                    <th class="px-6 py-3.5 text-center text-xs font-bold uppercase tracking-wider">Detalle</th>
+                                    <th class="px-4 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Placa</th>
+                                    <th class="px-4 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Marca</th>
+                                    <th class="px-4 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Modelo</th>
+                                    <th class="px-4 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
+                                    <th class="w-32 max-w-[130px] px-3 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Tipo de Contrato</th>
+                                    <th class="min-w-[230px] px-4 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Alertas Pagos / Multas</th>
+                                    <th class="px-4 py-3.5 text-center text-xs font-bold uppercase tracking-wider">Entrega Llaves</th>
+                                    <th class="px-4 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Alertas Documentación</th>
+                                    <th class="px-4 py-3.5 text-left text-xs font-bold uppercase tracking-wider">Estado</th>
+                                    <th class="px-4 py-3.5 text-center text-xs font-bold uppercase tracking-wider">Detalle</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200 bg-white">
@@ -535,78 +583,103 @@ const vehiculosFiltrados = computed(() => {
                                     class="cursor-pointer transition duration-150 hover:bg-yellow-50"
                                     @click="abrirDetalles(auto)"
                                 >
-                                    <td class="whitespace-nowrap px-6 py-4 font-mono text-sm font-bold text-gray-900">
+                                    <td class="whitespace-nowrap px-4 py-4 font-mono text-sm font-bold text-gray-900">
                                         {{ auto.id_vehiculo || auto.placa }}
                                     </td>
-                                    <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-gray-900">
+                                    <td class="whitespace-nowrap px-4 py-4 text-sm font-bold text-gray-900">
                                         {{ auto.marca?.nombre || 'No registrada' }}
                                     </td>
-                                    <td class="px-6 py-4 text-sm text-gray-900">
+                                    <td class="px-4 py-4 text-sm text-gray-900">
                                         <div class="font-semibold">{{ auto.modelo }}</div>
                                         <div class="text-xs text-gray-500">{{ auto.clase?.nombre }} • {{ auto.transmision?.nombre }}</div>
-                                        <div v-if="auto.tipo_contrato_nombre" class="mt-1">
-                                            <span class="inline-flex rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-800">
-                                                {{ auto.tipo_contrato_nombre }}
-                                            </span>
-                                        </div>
                                     </td>
-                                    <td class="px-6 py-4 text-sm text-gray-700">
-                                        <span class="font-semibold">{{ auto.anio }}</span>
-                                        <span class="block text-xs text-gray-500">{{ auto.color?.nombre }}</span>
-                                    </td>
-                                    <td class="px-6 py-4 text-sm text-gray-700">
+                                    <td class="whitespace-nowrap px-4 py-4 text-sm text-gray-700">
                                         {{ auto.patio?.nombre || 'Sin asignar' }}
                                     </td>
-                                    <td class="px-6 py-4 text-sm">
-                                        <div class="flex flex-col items-start gap-1.5">
-                                            <span
-                                                v-if="auto.multas_pendientes_count > 0 && auto.multas_requieren_revision_manual && Number(auto.multas_pendientes_total || 0) <= 0"
-                                                class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-900"
-                                            >
-                                                ⚠️ {{ auto.multas_pendientes_count }} multa(s) · Revisión manual ($0.00)
-                                            </span>
-                                            <span
-                                                v-else-if="auto.multas_pendientes_count > 0"
-                                                class="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2.5 py-0.5 text-xs font-bold text-red-800"
-                                            >
-                                                ⚠️ {{ auto.multas_pendientes_count }} pendiente(s) · {{ formatearMoneda(auto.multas_pendientes_total) }}{{ auto.multas_requieren_revision_manual ? ' · Rev. manual' : '' }}
-                                            </span>
+                                    <td class="w-32 max-w-[130px] px-3 py-4 text-xs">
+                                        <span
+                                            v-if="auto.tipo_contrato?.nombre || auto.tipo_contrato_nombre"
+                                            class="inline-flex rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold leading-tight text-indigo-800"
+                                        >
+                                            {{ auto.tipo_contrato?.nombre || auto.tipo_contrato_nombre }}
+                                        </span>
+                                        <span v-else class="text-gray-400">Sin asignar</span>
+                                    </td>
+                                    <td class="min-w-[230px] px-4 py-4 text-xs">
+                                        <div class="flex flex-col items-start gap-1">
+                                            <template v-if="tieneAlertaPagosMultas(auto)">
+                                                <span
+                                                    v-if="auto.multas_pendientes_count > 0 && auto.multas_requieren_revision_manual && Number(auto.multas_pendientes_total || 0) <= 0"
+                                                    class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-bold text-amber-900"
+                                                >
+                                                    ⚠️ {{ auto.multas_pendientes_count }} multa(s) · Rev. manual ($0.00)
+                                                </span>
+                                                <span
+                                                    v-else-if="auto.multas_pendientes_count > 0"
+                                                    class="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 font-bold text-red-800"
+                                                >
+                                                    ⚠️ {{ auto.multas_pendientes_count }} multa(s) · {{ formatearMoneda(auto.multas_pendientes_total) }}{{ auto.multas_requieren_revision_manual ? ' · Rev. manual' : '' }}
+                                                </span>
+                                                <span
+                                                    v-if="auto.credito_vencido"
+                                                    class="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 font-bold text-red-800"
+                                                >
+                                                    🚨 Crédito vencido
+                                                </span>
+                                                <span
+                                                    v-if="Number(auto.saldo_pendiente_pago || 0) > 0.009"
+                                                    class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-bold text-amber-900"
+                                                >
+                                                    ⏳ Saldo: {{ formatearMoneda(auto.saldo_pendiente_pago) }}
+                                                </span>
+                                            </template>
                                             <span
                                                 v-else
-                                                class="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 text-xs font-semibold text-green-700"
+                                                class="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 font-semibold text-green-700"
                                             >
-                                                ✅ Sin multas
-                                            </span>
-
-                                            <span
-                                                :class="estadoCaducidadRtv(auto.fecha_caducidad_revision).clasesTabla"
-                                                class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold"
-                                                :title="estadoCaducidadRtv(auto.fecha_caducidad_revision).detalle"
-                                            >
-                                                {{ estadoCaducidadRtv(auto.fecha_caducidad_revision).estado === 'vencida'
-                                                    ? '🚨'
-                                                    : estadoCaducidadRtv(auto.fecha_caducidad_revision).estado === 'proxima'
-                                                        ? '⏳'
-                                                        : estadoCaducidadRtv(auto.fecha_caducidad_revision).estado === 'vigente'
-                                                            ? '✅'
-                                                            : 'ℹ️' }}
-                                                {{ estadoCaducidadRtv(auto.fecha_caducidad_revision).etiqueta }}
-                                            </span>
-
-                                            <span
-                                                v-if="auto.contrato_pendiente"
-                                                class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-900"
-                                            >
-                                                📄 Contrato pendiente de subir
+                                                ✅ Al día
                                             </span>
                                         </div>
                                     </td>
-                                    <td class="whitespace-nowrap px-6 py-4 text-sm">
-                                        <span class="rounded-full border border-yellow-300 bg-yellow-100 px-2.5 py-1 text-xs font-bold text-yellow-800">
+                                    <td class="whitespace-nowrap px-4 py-4 text-center text-xs">
+                                        <span
+                                            v-if="auto.entrega_llaves_solicitada"
+                                            class="inline-flex items-center rounded-full border border-green-300 bg-green-100 px-2.5 py-0.5 font-bold text-green-800"
+                                        >
+                                            Sí
+                                        </span>
+                                        <span
+                                            v-else
+                                            class="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 font-semibold text-amber-800"
+                                        >
+                                            No
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-4 text-xs">
+                                        <div v-if="documentosFaltantes(auto).length === 0">
+                                            <span class="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 font-semibold text-green-700">
+                                                ✅ Completo
+                                            </span>
+                                        </div>
+                                        <div v-else class="flex flex-wrap gap-1">
+                                            <span
+                                                v-for="faltante in documentosFaltantes(auto)"
+                                                :key="faltante.texto"
+                                                class="inline-flex items-center rounded-full border px-2 py-0.5 font-bold"
+                                                :class="faltante.severidad === 'red'
+                                                    ? 'border-red-300 bg-red-100 text-red-800'
+                                                    : 'border-amber-300 bg-amber-100 text-amber-900'"
+                                            >
+                                                Falta: {{ faltante.texto }}
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td class="whitespace-nowrap px-4 py-4 text-xs">
+                                        <span class="rounded-full border border-yellow-300 bg-yellow-100 px-2.5 py-1 font-bold text-yellow-800">
                                             {{ auto.estado?.nombre }}
                                         </span>
                                     </td>
-                                    <td class="whitespace-nowrap px-6 py-4 text-center">
+                                    <td class="whitespace-nowrap px-4 py-4 text-center">
                                         <span class="inline-flex items-center rounded bg-gray-900 px-3 py-1 text-xs font-bold text-yellow-400 hover:bg-gray-700">
                                             Abrir Ficha &rarr;
                                         </span>
@@ -614,7 +687,7 @@ const vehiculosFiltrados = computed(() => {
                                 </tr>
 
                                 <tr v-if="!vehiculosFiltrados.length">
-                                    <td colspan="8" class="px-6 py-10 text-center text-gray-500">
+                                    <td colspan="10" class="px-6 py-10 text-center text-gray-500">
                                         {{ vehiculos.length === 0
                                             ? 'No hay vehículos registrados en el inventario todavía.'
                                             : 'Ningún vehículo coincide con los filtros seleccionados.' }}
@@ -802,6 +875,12 @@ const vehiculosFiltrados = computed(() => {
                                                             class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800"
                                                         >
                                                             ✅ Contrato cargado
+                                                        </span>
+                                                        <span
+                                                            v-if="vehiculoSeleccionado.tiene_contrato_cargado && vehiculoSeleccionado.contrato_cantidad_hojas"
+                                                            class="rounded-full border border-gray-200 bg-gray-100 px-2.5 py-0.5 text-xs font-semibold text-gray-700"
+                                                        >
+                                                            {{ vehiculoSeleccionado.contrato_cantidad_hojas }} {{ vehiculoSeleccionado.contrato_cantidad_hojas === 1 ? 'hoja' : 'hojas' }}
                                                         </span>
                                                         <span
                                                             v-else-if="vehiculoSeleccionado.contrato_pendiente"

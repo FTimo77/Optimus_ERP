@@ -167,18 +167,46 @@ class InventarioVehiculoController extends Controller
                 ? (bool) $tipoContrato->requiere_documento
                 : false;
             $rutaContratoDoc = $vehiculo->documentos?->ruta_contrato;
-            $tieneContratoCargado = is_string($rutaContratoDoc)
-                && trim($rutaContratoDoc) !== ''
-                && (Storage::disk('local')->exists($rutaContratoDoc) || Storage::disk('public')->exists($rutaContratoDoc));
+            $discoContrato = is_string($rutaContratoDoc) && trim($rutaContratoDoc) !== ''
+                ? (Storage::disk('local')->exists($rutaContratoDoc)
+                    ? 'local'
+                    : (Storage::disk('public')->exists($rutaContratoDoc) ? 'public' : null))
+                : null;
+            $tieneContratoCargado = $discoContrato !== null;
 
             $vehiculo->setAttribute('tipo_contrato_nombre', $tipoContratoNombre);
             $vehiculo->setAttribute('requiere_documento_contrato', $requiereDocContrato);
             $vehiculo->setAttribute('tiene_contrato_cargado', $tieneContratoCargado);
+            $vehiculo->setAttribute(
+                'contrato_cantidad_hojas',
+                $tieneContratoCargado ? $this->contarHojasDocumento($discoContrato, $rutaContratoDoc) : null,
+            );
             $vehiculo->setAttribute('contrato_pendiente', $requiereDocContrato && ! $tieneContratoCargado);
             $vehiculo->setAttribute(
                 'contrato_archivo_url',
                 $tieneContratoCargado ? route('vehiculos.contrato.descargar', $vehiculo->id_vehiculo) : null,
             );
+
+            $custodiaLlaves = $vehiculo->custodias->firstWhere('item', 'llaves');
+            $custodiaMatricula = $vehiculo->custodias->firstWhere('item', 'matricula');
+            $custodiaRtv = $vehiculo->custodias->firstWhere('item', 'rtv');
+
+            $rutaMatricula = $vehiculo->documentos?->ruta_matricula ?? $validacion?->ruta_documento;
+            $tieneMatriculaCargada = (is_string($rutaMatricula)
+                && trim($rutaMatricula) !== ''
+                && (Storage::disk('local')->exists($rutaMatricula) || Storage::disk('public')->exists($rutaMatricula)))
+                || $custodiaMatricula?->estado === 'recibido';
+
+            $creditoVencido = $vehiculo->credito !== null
+                && $vehiculo->credito->estado === 'pendiente'
+                && $vehiculo->credito->fecha_vencimiento !== null
+                && $vehiculo->credito->fecha_vencimiento->copy()->endOfDay()->isPast();
+
+            $vehiculo->setAttribute('entrega_llaves_solicitada', $custodiaLlaves !== null);
+            $vehiculo->setAttribute('entrega_llaves_estado', $custodiaLlaves?->estado ?? 'sin_asignar');
+            $vehiculo->setAttribute('tiene_matricula_cargada', $tieneMatriculaCargada);
+            $vehiculo->setAttribute('custodia_rtv_recibida', $custodiaRtv?->estado === 'recibido');
+            $vehiculo->setAttribute('credito_vencido', $creditoVencido);
         });
 
         $usuario = $request->user();
@@ -553,6 +581,46 @@ class InventarioVehiculoController extends Controller
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
         );
+    }
+
+    private function contarHojasDocumento(string $disco, string $ruta): ?int
+    {
+        $extension = strtolower(pathinfo($ruta, PATHINFO_EXTENSION));
+
+        if (in_array($extension, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+            return 1;
+        }
+
+        if ($extension === 'pdf') {
+            $contenido = Storage::disk($disco)->get($ruta);
+            if (! is_string($contenido) || $contenido === '') {
+                return null;
+            }
+
+            $conteoPage = preg_match_all('/\/Type\s*\/Page\b(?!s)/', $contenido);
+            $maxCount = 0;
+            if (preg_match_all('/\/Count\s+(\d+)/', $contenido, $matches) && ! empty($matches[1])) {
+                $maxCount = max(array_map('intval', $matches[1]));
+            }
+
+            $hojas = max((int) $conteoPage, $maxCount);
+
+            return $hojas > 0 ? $hojas : 1;
+        }
+
+        if ($extension === 'docx' && class_exists(\ZipArchive::class)) {
+            $rutaAbsoluta = Storage::disk($disco)->path($ruta);
+            $zip = new \ZipArchive();
+            if ($zip->open($rutaAbsoluta) === true) {
+                $appXml = $zip->getFromName('docProps/app.xml');
+                $zip->close();
+                if (is_string($appXml) && preg_match('/<Pages>(\d+)<\/Pages>/', $appXml, $m)) {
+                    return max(1, (int) $m[1]);
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
