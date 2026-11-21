@@ -80,12 +80,14 @@ Existen tres caminos en `VehiculoIngresoController::store`:
 - `aprobada`: El revisor aprueba el expediente en `ValidacionDocumentosController::decidir`. Dentro de `DB::transaction()` con `lockForUpdate()`, se crea el registro en `vehiculos`, se registran `Documentos_vehiculo` (`ruta_matricula`, `ruta_cuv`) y se mueven las imágenes del disco privado al público.
 - `rechazada`: El revisor rechaza el expediente. El autor original (`subido_por`) puede subsanar y reenviar a `'pendiente'` mediante `reenviar` agregando `comentario_reenvio`.
 
-### 4.3 Separación Estricta de Discos (`Storage`)
-- **Disco `local` (Privado)**:
-  - Documentos legales sensibles: matrículas (`validacion-documentos/...`) y certificados CUV (`validacion-documentos/{id}/cuv/...`). Se sirven **únicamente** a usuarios autenticados mediante `StreamedResponse` en `ValidacionDocumentosController::documento` y `cuv` con cabecera `'X-Content-Type-Options' => 'nosniff'`.
-  - Imágenes temporales de vehículos en revisión (`validacion-documentos/{id}/imagenes/...` o `validacion-documentos/manual/{placa}/imagenes/...`).
-- **Disco `public` (Público)**:
-  - Fotos de inventario de vehículos ya aprobados/creados (`vehiculos/...`), referenciadas en `imagen_vehiculos` (la primera imagen lleva `es_principal = true`).
+### 4.3 Regla Global de Arquitectura y Seguridad — Almacenamiento Privado de Documentos (`Storage`)
+- **Regla obligatoria para todo el proyecto (módulos actuales y futuros)**: **Ningún documento confidencial, legal, financiero o de respaldo** (matrículas, CUV, contratos, poderes, mandatos, cédulas, comprobantes de pago/abonos, comprobantes de multas, constancias, actas, etc.) debe guardarse jamás en el disco `'public'` (`storage/app/public`).
+- **Disco `local` (Privado -> `storage/app/private/`)**:
+  - Todo `->store(...)` o escritura de documentos confidenciales/legales/financieros en controladores y servicios debe apuntar **exclusivamente** al disco `'local'` (nunca `'public'`).
+  - Incluye: matrículas (`validacion-documentos/...`), CUV (`validacion-documentos/{id}/cuv/...`), cédulas (`documentos/cedulas/...`), contratos generados o legalizados (`documentos/contratos/...`), comprobantes de pago/abonos (`validacion-documentos/{id}/pagos/...`, `vehiculos/{placa}/pagos/...`), comprobantes de multas (`vehiculos/{placa}/multas/...`) e imágenes temporales de vehículos en revisión (`validacion-documentos/{id}/imagenes/...`).
+  - **Zero exposición por URL directa**: En el frontend (Vue) está prohibido usar enlaces directos `/storage/...` para documentos. Toda visualización o descarga debe pasar por rutas protegidas en `routes/web.php` bajo `middleware(['auth'])` (y roles/permisos de Spatie cuando corresponda), entregando el archivo desde el controlador mediante `Storage::disk('local')->response($ruta)` o `Storage::disk('local')->download($ruta)` tras validar su existencia (`abort_unless(Storage::disk('local')->exists(...), 404)`) con cabecera `'X-Content-Type-Options' => 'nosniff'`.
+- **Disco `public` (Público -> `storage/app/public/`)**:
+  - Reservado **únicamente** para las fotografías comerciales exteriores/interiores de los vehículos aprobados que se muestran en el catálogo/inventario (`vehiculos/...`), referenciadas en `imagen_vehiculos` (la primera imagen lleva `es_principal = true`).
 - **Limpieza ante fallos**: Toda operación que escriba archivos en `Storage` antes o durante una transacción `DB::transaction` debe capturar `Throwable` y eliminar los archivos creados si la transacción falla.
 
 ---

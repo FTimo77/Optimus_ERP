@@ -26,6 +26,7 @@ class Vehiculo extends Model
         'id_tipo_vehiculo',
         'id_servicio',
         'id_tipo_contrato',
+        'metodo_ingreso',
         'id_patio',
         'id_estado',
         'id_proveedor',

@@ -40,9 +40,11 @@ const form = useForm({
     lugar_revision: '',
     documento_matricula: null,
     id_marca: '',
+    marca_nombre: '',
     id_clase: '',
     id_pais: '',
     id_color: '',
+    color_nombre: '',
     id_tipo_combustible: '',
     id_transmision: '',
     modelo: '',
@@ -105,20 +107,33 @@ const buscarPorPlaca = async () => {
             if (v.modelo) form.modelo = v.modelo;
             if (v.anio) form.anio = v.anio;
             if (v.cilindraje) form.cilindraje = String(v.cilindraje);
-            if (v.id_marca) form.id_marca = v.id_marca;
+            if (v.id_marca) {
+                form.id_marca = v.id_marca;
+                const marcaEncontrada = listaMarcas.value.find(
+                    (m) => String(m.id_marca) === String(v.id_marca),
+                );
+                if (marcaEncontrada) form.marca_nombre = marcaEncontrada.nombre;
+            }
             if (v.id_pais) form.id_pais = v.id_pais;
-            if (v.id_color) form.id_color = v.id_color;
+            if (v.id_color) {
+                form.id_color = v.id_color;
+                const colorEncontrado = listaColores.value.find(
+                    (c) => String(c.id_color) === String(v.id_color),
+                );
+                if (colorEncontrado) form.color_nombre = colorEncontrado.nombre;
+            }
             if (v.id_clase) form.id_clase = v.id_clase;
             if (v.servicio) form.servicio = v.servicio;
             if (v.tipo_vehiculo) form.tipo_vehiculo = v.tipo_vehiculo;
             if (v.fecha_caducidad_revision) form.fecha_caducidad_revision = v.fecha_caducidad_revision;
 
             tipoMensaje.value = 'exito';
-            mensajePlaca.value = '¡Datos del vehículo cargados automáticamente! Completa los campos restantes.';
+            mensajePlaca.value = '¡Datos del vehículo cargados automáticamente! Puedes editar o completar cualquier campo.';
         }
     } catch (error) {
         tipoMensaje.value = 'error';
-        mensajePlaca.value = error.response?.data?.message || 'No se encontraron datos para esta placa. Llena el formulario manualmente.';
+        mensajePlaca.value = error.response?.data?.message
+            || 'No se encontraron datos para esta placa. Edición manual habilitada para que completes los campos.';
     } finally {
         cargandoPlaca.value = false;
     }
@@ -278,6 +293,7 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                         <option value="" disabled>Seleccione una categoría...</option>
                         <option value="particular">Particular</option>
                         <option value="empresa">Empresa</option>
+                        <option value="nuevos">Nuevos</option>
                     </select>
                 </div>
 
@@ -1170,6 +1186,259 @@ const onAuditoriaError = ({ message, manualReviewAvailable, file }) => {
                             </div>
                         </form>
                 </EscanerAuditoriaMatricula>
+
+                <!-- FORMULARIO SIMPLIFICADO EXCLUSIVO PARA VEHÍCULOS NUEVOS (INGRESO DIRECTO A INVENTARIO) -->
+                <form
+                    v-if="categoriaSeleccionada === 'nuevos'"
+                    @submit.prevent="enviarFormulario"
+                    class="space-y-6 bg-white p-6 shadow-sm sm:rounded-lg"
+                >
+                    <div class="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                        <strong>Ingreso categoría Nuevos:</strong> El vehículo se registra directamente en el inventario operativo (sin pasar por la cola de validación), con su expediente base y asiento inicial en Kardex habilitados de inmediato.
+                    </div>
+
+                    <!-- Alertas de error de validación en Laravel -->
+                    <div v-if="Object.keys(form.errors).length > 0" class="mb-4 border-l-4 border-red-500 bg-red-50 p-4">
+                        <p class="font-bold text-red-700">Por favor corrige los siguientes errores:</p>
+                        <ul class="list-inside list-disc text-sm text-red-600">
+                            <li v-for="(error, campo) in form.errors" :key="campo">{{ error }}</li>
+                        </ul>
+                    </div>
+
+                    <!-- BARRA DE AUTOCOMPLETADO POR PLACA (OPCIONAL / NO BLOQUEANTE) -->
+                    <div class="rounded-lg bg-gray-900 p-5 text-white shadow-md">
+                        <div class="flex flex-col items-center justify-between gap-4 md:flex-row">
+                            <div>
+                                <h3 class="text-sm font-extrabold uppercase tracking-wider text-yellow-400">
+                                    Autocompletar Datos por Placa (Opcional)
+                                </h3>
+                                <p class="mt-0.5 text-xs text-gray-300">
+                                    Si el vehículo ya cuenta con placa, puedes buscarla para rellenar Marca, Modelo, Año y Color. Si no existe o falla, todos los campos permanecen editables.
+                                </p>
+                            </div>
+
+                            <div class="flex w-full items-center gap-2 md:w-auto">
+                                <input
+                                    id="placa-nuevos"
+                                    v-model="form.id_vehiculo"
+                                    @keyup.enter.prevent="buscarPorPlaca"
+                                    type="text"
+                                    maxlength="20"
+                                    placeholder="Placa opcional (ej. PFY2582)"
+                                    :disabled="cargandoPlaca"
+                                    aria-label="Placa del vehículo (opcional)"
+                                    class="w-full rounded-md border-gray-600 bg-gray-800 px-3 py-2 font-mono text-sm uppercase text-white focus:border-yellow-500 focus:ring-yellow-500 md:w-52"
+                                />
+                                <button
+                                    type="button"
+                                    @click="buscarPorPlaca"
+                                    :disabled="cargandoPlaca"
+                                    class="whitespace-nowrap rounded-md bg-yellow-500 px-5 py-2 text-sm font-bold text-black shadow transition hover:bg-yellow-600 disabled:opacity-50"
+                                >
+                                    {{ cargandoPlaca ? 'Buscando datos...' : 'Buscar Placa' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div
+                            v-if="cargandoPlaca"
+                            role="progressbar"
+                            aria-label="Buscando información de la placa"
+                            class="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-700"
+                        >
+                            <div class="loading-bar__indicator h-full w-1/3 rounded-full bg-yellow-400" />
+                        </div>
+
+                        <div
+                            v-if="mensajePlaca"
+                            class="mt-3 border-t border-gray-700 pt-3 text-xs font-semibold"
+                            :class="tipoMensaje === 'exito' ? 'text-green-400' : 'text-amber-400'"
+                        >
+                            {{ mensajePlaca }}
+                        </div>
+                    </div>
+
+                    <!-- CAMPOS SIMPLIFICADOS PARA NUEVOS -->
+                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        <div>
+                            <label for="nuevo-placa-campo" class="block text-sm font-medium text-gray-700">
+                                Placa <span class="text-xs font-normal text-gray-400">(opcional)</span>
+                            </label>
+                            <input
+                                id="nuevo-placa-campo"
+                                v-model="form.id_vehiculo"
+                                type="text"
+                                maxlength="20"
+                                placeholder="Dejar vacío si aún no tiene placa"
+                                class="mt-1 block w-full rounded-md border-gray-300 font-mono uppercase shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            />
+                            <p class="mt-1 text-xs text-gray-500">
+                                Si se deja vacío, se asignará un código temporal único (ej. NUEVO-XXXXXXXX).
+                            </p>
+                            <p v-if="form.errors.id_vehiculo" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.id_vehiculo }}
+                            </p>
+                        </div>
+
+                        <div>
+                            <label for="nuevo-marca" class="block text-sm font-medium text-gray-700">
+                                Marca
+                            </label>
+                            <input
+                                id="nuevo-marca"
+                                v-model="form.marca_nombre"
+                                type="text"
+                                list="datalist-marcas-nuevos"
+                                maxlength="100"
+                                required
+                                placeholder="Selecciona o escribe una marca..."
+                                class="mt-1 block w-full rounded-md border-gray-300 uppercase shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            />
+                            <datalist id="datalist-marcas-nuevos">
+                                <option
+                                    v-for="item in listaMarcas"
+                                    :key="item.id_marca"
+                                    :value="item.nombre"
+                                />
+                            </datalist>
+                            <p class="mt-1 text-xs text-gray-500">
+                                Puedes elegir una marca existente o escribir una nueva.
+                            </p>
+                            <p v-if="form.errors.marca_nombre" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.marca_nombre }}
+                            </p>
+                        </div>
+
+                        <div>
+                            <label for="nuevo-modelo" class="block text-sm font-medium text-gray-700">
+                                Modelo
+                            </label>
+                            <input
+                                id="nuevo-modelo"
+                                v-model="form.modelo"
+                                type="text"
+                                maxlength="100"
+                                required
+                                placeholder="Ej: Corolla / Hilux / Tracker"
+                                class="mt-1 block w-full rounded-md border-gray-300 uppercase shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            />
+                            <p v-if="form.errors.modelo" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.modelo }}
+                            </p>
+                        </div>
+
+                        <div>
+                            <label for="nuevo-anio" class="block text-sm font-medium text-gray-700">
+                                Año
+                            </label>
+                            <input
+                                id="nuevo-anio"
+                                v-model="form.anio"
+                                type="number"
+                                min="1980"
+                                :max="new Date().getFullYear() + 1"
+                                required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            />
+                            <p v-if="form.errors.anio" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.anio }}
+                            </p>
+                        </div>
+
+                        <div>
+                            <label for="nuevo-color" class="block text-sm font-medium text-gray-700">
+                                Color
+                            </label>
+                            <input
+                                id="nuevo-color"
+                                v-model="form.color_nombre"
+                                type="text"
+                                list="datalist-colores-nuevos"
+                                maxlength="100"
+                                required
+                                placeholder="Selecciona o escribe un color..."
+                                class="mt-1 block w-full rounded-md border-gray-300 uppercase shadow-sm focus:border-yellow-500 focus:ring-yellow-500"
+                            />
+                            <datalist id="datalist-colores-nuevos">
+                                <option
+                                    v-for="item in listaColores"
+                                    :key="item.id_color"
+                                    :value="item.nombre"
+                                />
+                            </datalist>
+                            <p class="mt-1 text-xs text-gray-500">
+                                Puedes elegir un color existente o escribir uno nuevo.
+                            </p>
+                            <p v-if="form.errors.color_nombre" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.color_nombre }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- FOTOS COMERCIALES OPCIONALES -->
+                    <div>
+                        <label for="imagenes-nuevos" class="block text-sm font-medium text-gray-700">
+                            Fotos del vehículo (opcional, máximo 10)
+                        </label>
+                        <div class="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
+                            <input
+                                id="imagenes-nuevos"
+                                ref="imagenesInput"
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp"
+                                multiple
+                                aria-describedby="imagenes-nuevos-ayuda"
+                                class="peer sr-only"
+                                @input="form.imagenes = Array.from($event.target.files ?? [])"
+                            />
+                            <label
+                                for="imagenes-nuevos"
+                                class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2.5 text-sm font-bold text-gray-900 shadow-sm transition hover:bg-yellow-400 peer-focus-visible:ring-2 peer-focus-visible:ring-yellow-500 peer-focus-visible:ring-offset-2"
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    class="h-5 w-5"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                    stroke-width="1.8"
+                                    aria-hidden="true"
+                                >
+                                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                                    <circle cx="8.5" cy="8.5" r="1.5" />
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="m21 15-5-5L5 21" />
+                                </svg>
+                                Añadir fotos
+                            </label>
+                            <p id="imagenes-nuevos-ayuda" class="text-xs text-gray-500">
+                                JPG, PNG o WebP; máximo 5 MB por imagen.
+                            </p>
+                        </div>
+                        <p v-if="form.imagenes.length" class="mt-1 text-xs text-gray-600">
+                            {{ form.imagenes.length }} foto(s) seleccionada(s).
+                        </p>
+                        <p v-if="form.errors.imagenes" class="mt-1 text-sm text-red-600">
+                            {{ form.errors.imagenes }}
+                        </p>
+                        <p
+                            v-for="(error, index) in erroresImagenes"
+                            :key="index"
+                            class="mt-1 text-sm text-red-600"
+                        >
+                            {{ error }}
+                        </p>
+                    </div>
+
+                    <div class="flex justify-end">
+                        <button
+                            type="submit"
+                            :disabled="form.processing"
+                            class="rounded-md bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {{ form.processing ? 'Ingresando al inventario...' : 'Ingresar vehículo nuevo al inventario' }}
+                        </button>
+                    </div>
+                </form>
 
                 <!-- FORMULARIO MANUAL CON AUTOCOMPLETADO POR PLACA (EMPRESA O FALLBACK DE GEMINI) -->
                 <form

@@ -1519,7 +1519,7 @@ class ValidacionDocumentosController extends Controller
         }
 
         $rutaAnterior = $validacion->ruta_cedula_cliente;
-        $rutaCedula = $archivo->store('documentos/cedulas', 'public');
+        $rutaCedula = $archivo->store('documentos/cedulas', 'local');
 
         if ($rutaCedula === false) {
             return response()->json([
@@ -1592,7 +1592,7 @@ class ValidacionDocumentosController extends Controller
         try {
             $respuestaGemini = $this->ejecutarEscaneoGemini($apiKey, $payload);
         } catch (Throwable $exception) {
-            Storage::disk('public')->delete($rutaCedula);
+            Storage::disk('local')->delete($rutaCedula);
             Log::warning('Error al escanear cédula con escanear_gemini.cjs.', [
                 'validacion_id' => $validacion->id,
                 'exception' => $exception->getMessage(),
@@ -1605,7 +1605,7 @@ class ValidacionDocumentosController extends Controller
         }
 
         if (isset($respuestaGemini['error']['message'])) {
-            Storage::disk('public')->delete($rutaCedula);
+            Storage::disk('local')->delete($rutaCedula);
 
             return response()->json([
                 'success' => false,
@@ -1615,7 +1615,7 @@ class ValidacionDocumentosController extends Controller
 
         $textoJson = $respuestaGemini['candidates'][0]['content']['parts'][0]['text'] ?? null;
         if (! is_string($textoJson) || trim($textoJson) === '') {
-            Storage::disk('public')->delete($rutaCedula);
+            Storage::disk('local')->delete($rutaCedula);
 
             return response()->json([
                 'success' => false,
@@ -1627,7 +1627,7 @@ class ValidacionDocumentosController extends Controller
         $datosExtraidos = json_decode($textoLimpio, true);
 
         if (! is_array($datosExtraidos)) {
-            Storage::disk('public')->delete($rutaCedula);
+            Storage::disk('local')->delete($rutaCedula);
 
             return response()->json([
                 'success' => false,
@@ -1655,7 +1655,7 @@ class ValidacionDocumentosController extends Controller
         ]);
 
         if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula) {
-            Storage::disk('public')->delete($rutaAnterior);
+            Storage::disk('local')->delete($rutaAnterior);
         }
 
         return response()->json([
@@ -1728,7 +1728,7 @@ class ValidacionDocumentosController extends Controller
             preg_replace('/[^A-Z0-9]/i', '', $validacion->placa) ?: $validacion->id,
             $ahora->format('Ymd_His'),
         );
-        $rutaAbsoluta = Storage::disk('public')->path($rutaRelativa);
+        $rutaAbsoluta = Storage::disk('local')->path($rutaRelativa);
         $directorio = dirname($rutaAbsoluta);
 
         if (! is_dir($directorio) && ! mkdir($directorio, 0775, true) && ! is_dir($directorio)) {
@@ -1808,7 +1808,7 @@ class ValidacionDocumentosController extends Controller
             ]);
 
         if ($rutaAnterior !== null && $rutaAnterior !== $rutaRelativa) {
-            Storage::disk('public')->delete($rutaAnterior);
+            Storage::disk('local')->delete($rutaAnterior);
         }
 
         return response()->json([
@@ -1823,11 +1823,11 @@ class ValidacionDocumentosController extends Controller
     {
         abort_unless(
             $validacion->ruta_contrato_generado !== null
-                && Storage::disk('public')->exists($validacion->ruta_contrato_generado),
+                && Storage::disk('local')->exists($validacion->ruta_contrato_generado),
             404,
         );
 
-        return Storage::disk('public')->download(
+        return Storage::disk('local')->download(
             $validacion->ruta_contrato_generado,
             "contrato-compra-venta-{$validacion->placa}.docx",
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1838,7 +1838,7 @@ class ValidacionDocumentosController extends Controller
     {
         abort_unless(
             $validacion->ruta_cedula_cliente !== null
-                && Storage::disk('public')->exists($validacion->ruta_cedula_cliente),
+                && Storage::disk('local')->exists($validacion->ruta_cedula_cliente),
             404,
         );
 
@@ -1847,7 +1847,7 @@ class ValidacionDocumentosController extends Controller
             ? "cedula-cliente-{$validacion->placa}.{$extension}"
             : "cedula-cliente-{$validacion->placa}";
 
-        return Storage::disk('public')->download(
+        return Storage::disk('local')->download(
             $validacion->ruta_cedula_cliente,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -2149,6 +2149,7 @@ class ValidacionDocumentosController extends Controller
             ? null
             : Servicio::firstOrCreate(['nombre' => $servicio])->id_servicio;
         $atributosVehiculo['id_tipo_contrato'] = $validacion->id_tipo_contrato;
+        $atributosVehiculo['metodo_ingreso'] = strtolower(trim((string) ($validacion->categoria_ingreso ?? 'particular'))) ?: 'particular';
         $atributosVehiculo['fecha_revision'] = $fechaRevision === null
             ? null
             : Carbon::createFromFormat('d-m-Y H:i:s', $fechaRevision)->format('Y-m-d H:i:s');
