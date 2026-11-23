@@ -39,15 +39,38 @@ use Throwable;
 
 class ValidacionDocumentosController extends Controller
 {
-    public function index(): Response
+    public function index(Request $request): Response
     {
+        $tabActiva = $request->query('tab') === 'historial' ? 'historial' : 'activas';
         $marcasPorId = DB::table('marca_vehiculos')->pluck('nombre', 'id_marca');
 
-        $validaciones = ValidacionDocumento::query()
-            ->where('estado_revision', '!=', 'borrador')
-            ->with('subidor:id,name')
-            ->latest()
+        $consultaBase = ValidacionDocumento::query()
+            ->where('estado_revision', '!=', 'borrador');
+
+        $filtroHistorial = static function ($query): void {
+            $query->where(function ($sub): void {
+                $sub->where('estado_revision', 'aprobada')
+                    ->whereNotNull('ruta_contrato_generado');
+            })->orWhere('estado_revision', 'registrada');
+        };
+
+        $filtroActivas = static function ($query): void {
+            $query->whereIn('estado_revision', ['pendiente', 'pendiente_comprobante', 'rechazada'])
+                ->orWhere(function ($sub): void {
+                    $sub->where('estado_revision', 'aprobada')
+                        ->whereNull('ruta_contrato_generado');
+                });
+        };
+
+        $totalActivas = (clone $consultaBase)->where($filtroActivas)->count();
+        $totalHistorial = (clone $consultaBase)->where($filtroHistorial)->count();
+
+        $validaciones = (clone $consultaBase)
+            ->where($tabActiva === 'historial' ? $filtroHistorial : $filtroActivas)
+            ->with(['subidor:id,name', 'revisor:id,name'])
+            ->latest($tabActiva === 'historial' ? 'revisado_en' : 'created_at')
             ->paginate(15)
+            ->withQueryString()
             ->through(function (ValidacionDocumento $validacion) use ($marcasPorId): array {
                 $datosIngreso = is_array($validacion->datos_ingreso) ? $validacion->datos_ingreso : [];
                 $marcaIngreso = isset($datosIngreso['id_marca'])
@@ -67,6 +90,8 @@ class ValidacionDocumentosController extends Controller
                     'tiene_contrato' => $validacion->ruta_contrato_generado !== null,
                     'alertas_criticas' => $validacion->alertas_criticas,
                     'subido_por' => $validacion->subidor?->name ?? 'Usuario eliminado',
+                    'revisado_por' => $validacion->revisor?->name,
+                    'revisado_en' => $validacion->revisado_en?->toIso8601String(),
                     'created_at' => $validacion->created_at?->toIso8601String(),
                 ];
             });
@@ -74,6 +99,9 @@ class ValidacionDocumentosController extends Controller
         return Inertia::render('ValidacionDocumentos/Index', [
             'validaciones' => $validaciones,
             'pendientes' => ValidacionDocumento::query()->where('estado_revision', 'pendiente')->count(),
+            'tabActiva' => $tabActiva,
+            'totalActivas' => $totalActivas,
+            'totalHistorial' => $totalHistorial,
         ]);
     }
 
@@ -187,6 +215,7 @@ class ValidacionDocumentosController extends Controller
                 'comentario_revision' => $validacion->comentario_revision,
                 'puede_reenviar' => $validacion->estado_revision === 'rechazada'
                     && $validacion->subido_por === $request->user()->id,
+                'puede_aprobar_rechazar' => $this->puedeAprobarORechazar($request->user()),
                 'documento_url' => $validacion->ruta_documento === null
                     ? null
                     : route('validacion-documentos.documento', $validacion),
@@ -966,6 +995,12 @@ class ValidacionDocumentosController extends Controller
 
     public function decidir(Request $request, ValidacionDocumento $validacion): RedirectResponse
     {
+        abort_unless(
+            $this->puedeAprobarORechazar($request->user()),
+            403,
+            'Solo el área de Administración puede aprobar o rechazar documentos.',
+        );
+
         $validated = $request->validate([
             'decision' => ['required', Rule::in(['aprobada', 'rechazada'])],
             'id_tipo_contrato' => ['required', 'integer', 'exists:tipo_contrato,id_tipo_contrato'],
@@ -1852,6 +1887,12 @@ class ValidacionDocumentosController extends Controller
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
         );
+    }
+
+    private function puedeAprobarORechazar(\App\Models\User $user): bool
+    {
+        return $user->hasAnyRole(['Administracion', 'Administrador'])
+            || $user->can('aprobar o rechazar solicitudes de compra');
     }
 
     /**

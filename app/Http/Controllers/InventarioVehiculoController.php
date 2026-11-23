@@ -11,6 +11,7 @@ use App\Services\Inventario\InventarioConsultaService;
 use App\Services\Inventario\MultasPagosVehiculoService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -123,5 +124,31 @@ class InventarioVehiculoController extends Controller
     public function descargarContrato(Vehiculo $vehiculo): StreamedResponse
     {
         return $this->custodiaDocumentosService->descargarContrato($vehiculo);
+    }
+
+    public function actualizarPrecioVenta(Request $request, Vehiculo $vehiculo): RedirectResponse
+    {
+        abort_unless(
+            $request->user()?->hasRole('Administrador'),
+            403,
+            'Solo el Administrador puede fijar o modificar el precio de venta.',
+        );
+
+        $validated = $request->validate([
+            'precio_venta' => ['required', 'numeric', 'min:0', 'max:999999999999.99'],
+        ]);
+
+        DB::transaction(function () use ($vehiculo, $validated): void {
+            $vehiculoBloqueado = Vehiculo::query()
+                ->whereKey($vehiculo->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $vehiculoBloqueado->update([
+                'precio_venta' => round((float) $validated['precio_venta'], 2),
+            ]);
+        });
+
+        return back()->with('success', 'Precio de venta actualizado correctamente.');
     }
 }

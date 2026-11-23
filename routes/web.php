@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\InventarioVehiculoController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\UsuarioController;
 use App\Http\Controllers\ValidacionDocumentosController;
 use App\Http\Controllers\VehiculoIngresoController;
 use Illuminate\Foundation\Application;
@@ -41,6 +42,8 @@ Route::middleware(['auth'])->group(function () {
         ->name('vehiculos.contrato.store');
     Route::get('/vehiculos/{vehiculo}/contrato-legalizado', [InventarioVehiculoController::class, 'descargarContrato'])
         ->name('vehiculos.contrato.descargar');
+    Route::patch('/vehiculos/{vehiculo}/precio-venta', [InventarioVehiculoController::class, 'actualizarPrecioVenta'])
+        ->name('vehiculos.precio-venta.update');
 
     // 2. MÓDULO DE COMPRAS / INGRESO (Para registrar adquisiciones)
     Route::get('/vehiculos/ingreso', [VehiculoIngresoController::class, 'create'])
@@ -88,6 +91,12 @@ Route::middleware(['auth'])->group(function () {
         ->name('validacion-documentos.contrato');
     Route::get('/validacion-documentos/{validacion}/cedula', [ValidacionDocumentosController::class, 'descargarCedula'])
         ->name('validacion-documentos.cedula');
+
+    // 3. GESTIÓN DE USUARIOS Y ROLES (Solo Administrador)
+    Route::get('/usuarios', [UsuarioController::class, 'index'])
+        ->name('usuarios.index');
+    Route::patch('/usuarios/{user}/rol', [UsuarioController::class, 'actualizarRol'])
+        ->name('usuarios.rol.update');
 });
 
 Route::middleware('auth')->group(function () {

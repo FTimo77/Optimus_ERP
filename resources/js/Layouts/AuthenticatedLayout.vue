@@ -60,6 +60,13 @@ const showingNavigationDropdown = ref(false);
                                 >
                                     Validación de documentos
                                 </NavLink>
+                                <NavLink
+                                    v-if="$page.props.auth.roles?.includes('Administrador')"
+                                    :href="route('usuarios.index')"
+                                    :active="route().current('usuarios.*')"
+                                >
+                                    Usuarios
+                                </NavLink>
                             </div>
                         </div>
 
@@ -184,6 +191,13 @@ const showingNavigationDropdown = ref(false);
                             :active="route().current('validacion-documentos.*')"
                         >
                             Validación de documentos
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink
+                            v-if="$page.props.auth.roles?.includes('Administrador')"
+                            :href="route('usuarios.index')"
+                            :active="route().current('usuarios.*')"
+                        >
+                            Usuarios
                         </ResponsiveNavLink>
                     </div>
 

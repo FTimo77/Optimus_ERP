@@ -3,6 +3,7 @@ import DetalleCustodiaDocumentos from '@/Components/Vehiculos/DetalleCustodiaDoc
 import DetalleInformacionGeneral from '@/Components/Vehiculos/DetalleInformacionGeneral.vue';
 import DetalleMultasVehiculo from '@/Components/Vehiculos/DetalleMultasVehiculo.vue';
 import DetallePagosVehiculo from '@/Components/Vehiculos/DetallePagosVehiculo.vue';
+import DetallePrecioVenta from '@/Components/Vehiculos/DetallePrecioVenta.vue';
 import {
     estadoCaducidadRtv,
     formatearFecha,
@@ -146,6 +147,11 @@ onUnmounted(() => window.removeEventListener('keydown', manejarTecla));
                 </div>
 
                 <DetalleInformacionGeneral :vehiculo="vehiculo" />
+
+                <DetallePrecioVenta
+                    :vehiculo="vehiculo"
+                    :es-admin="Boolean(usuarioActual?.es_admin)"
+                />
 
                 <DetalleMultasVehiculo :vehiculo="vehiculo" />
 

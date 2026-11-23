@@ -11,6 +11,18 @@ defineProps({
         type: Number,
         required: true,
     },
+    tabActiva: {
+        type: String,
+        default: 'activas',
+    },
+    totalActivas: {
+        type: Number,
+        default: 0,
+    },
+    totalHistorial: {
+        type: Number,
+        default: 0,
+    },
 });
 
 const estadoVisual = (validacion) => {
@@ -39,9 +51,9 @@ const estadoClases = (estado) => ({
     registrada: 'bg-blue-100 text-blue-800',
 }[estado] || 'bg-gray-100 text-gray-800');
 
-const fechaTexto = (fecha) => fecha
-    ? new Date(fecha).toLocaleString('es-EC')
-    : 'No disponible';
+const fechaTexto = (fecha) => (
+    fecha ? new Date(fecha).toLocaleString('es-EC') : 'No disponible'
+);
 </script>
 
 <template>
@@ -55,7 +67,7 @@ const fechaTexto = (fecha) => fecha
                         Validación de documentos
                     </h2>
                     <p class="mt-1 text-sm text-gray-500">
-                        Revisa los expedientes creados después del análisis automático.
+                        Revisa los expedientes en proceso y consulta el historial de solicitudes aprobadas.
                     </p>
                 </div>
                 <div class="rounded-md bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-900">
@@ -66,9 +78,52 @@ const fechaTexto = (fecha) => fecha
 
         <div class="py-8">
             <div class="mx-auto max-w-7xl space-y-4 px-4 sm:px-6 lg:px-8">
+                <!-- PESTAÑAS: BANDEJA ACTIVA / HISTORIAL DE APROBACIONES -->
+                <div class="border-b border-gray-200">
+                    <nav class="-mb-px flex flex-wrap gap-6" aria-label="Secciones de validación">
+                        <Link
+                            :href="route('validacion-documentos.index')"
+                            class="inline-flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-semibold transition"
+                            :class="tabActiva === 'activas'
+                                ? 'border-yellow-500 text-gray-900'
+                                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'"
+                        >
+                            <span>En proceso / Por revisar</span>
+                            <span
+                                class="rounded-full px-2 py-0.5 text-xs font-bold"
+                                :class="tabActiva === 'activas'
+                                    ? 'bg-amber-100 text-amber-900'
+                                    : 'bg-gray-100 text-gray-600'"
+                            >
+                                {{ totalActivas }}
+                            </span>
+                        </Link>
+
+                        <Link
+                            :href="route('validacion-documentos.index', { tab: 'historial' })"
+                            class="inline-flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-semibold transition"
+                            :class="tabActiva === 'historial'
+                                ? 'border-emerald-600 text-emerald-900'
+                                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'"
+                        >
+                            <span>Historial de aprobaciones</span>
+                            <span
+                                class="rounded-full px-2 py-0.5 text-xs font-bold"
+                                :class="tabActiva === 'historial'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-gray-100 text-gray-600'"
+                            >
+                                {{ totalHistorial }}
+                            </span>
+                        </Link>
+                    </nav>
+                </div>
+
                 <div class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
                     <div v-if="validaciones.data.length === 0" class="p-8 text-center text-sm text-gray-500">
-                        Todavía no hay documentos para revisar.
+                        {{ tabActiva === 'historial'
+                            ? 'Todavía no hay solicitudes aprobadas en el historial.'
+                            : 'No hay documentos pendientes o en proceso por revisar.' }}
                     </div>
 
                     <div v-else class="overflow-x-auto">
@@ -80,13 +135,17 @@ const fechaTexto = (fecha) => fecha
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Categoría</th>
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Alertas críticas</th>
                                     <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Estado</th>
-                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Subido por</th>
-                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Fecha</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                        {{ tabActiva === 'historial' ? 'Aprobado por' : 'Subido por' }}
+                                    </th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                        {{ tabActiva === 'historial' ? 'Fecha de aprobación' : 'Fecha' }}
+                                    </th>
                                     <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Expediente</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200 bg-white">
-                                <tr v-for="validacion in validaciones.data" :key="validacion.id">
+                                <tr v-for="validacion in validaciones.data" :key="validacion.id" class="hover:bg-gray-50">
                                     <td class="whitespace-nowrap px-5 py-4 font-mono text-sm font-semibold text-gray-900">
                                         {{ validacion.placa }}
                                     </td>
@@ -114,17 +173,23 @@ const fechaTexto = (fecha) => fecha
                                         </span>
                                     </td>
                                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-600">
-                                        {{ validacion.subido_por }}
+                                        <template v-if="tabActiva === 'historial'">
+                                            <div class="font-medium text-gray-800">{{ validacion.revisado_por || 'No registrado' }}</div>
+                                            <div class="text-xs text-gray-400">Subido por: {{ validacion.subido_por }}</div>
+                                        </template>
+                                        <template v-else>
+                                            {{ validacion.subido_por }}
+                                        </template>
                                     </td>
                                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-600">
-                                        {{ fechaTexto(validacion.created_at) }}
+                                        {{ fechaTexto(tabActiva === 'historial' ? (validacion.revisado_en || validacion.created_at) : validacion.created_at) }}
                                     </td>
                                     <td class="whitespace-nowrap px-5 py-4 text-right text-sm">
                                         <Link
                                             :href="route('validacion-documentos.show', validacion.id)"
                                             class="font-semibold text-indigo-700 hover:text-indigo-900"
                                         >
-                                            Revisar
+                                            {{ tabActiva === 'historial' ? 'Ver expediente' : 'Revisar' }}
                                         </Link>
                                     </td>
                                 </tr>
