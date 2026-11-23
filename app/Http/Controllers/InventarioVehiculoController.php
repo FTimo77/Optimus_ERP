@@ -35,6 +35,12 @@ class InventarioVehiculoController extends Controller
 
     public function pagarMulta(Request $request, Vehiculo $vehiculo, MultaVehiculo $multa): RedirectResponse
     {
+        abort_unless(
+            $this->consultaService->puedeVerDatosFinancieros($request->user()),
+            403,
+            'No tienes permiso para gestionar multas.',
+        );
+
         $request->validate([
             'comprobante' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
         ]);
@@ -49,8 +55,14 @@ class InventarioVehiculoController extends Controller
         return back()->with('success', 'Comprobante registrado y multa marcada como saldada.');
     }
 
-    public function comprobanteMulta(Vehiculo $vehiculo, MultaVehiculo $multa): StreamedResponse
+    public function comprobanteMulta(Request $request, Vehiculo $vehiculo, MultaVehiculo $multa): StreamedResponse
     {
+        abort_unless(
+            $this->consultaService->puedeVerDatosFinancieros($request->user()),
+            403,
+            'No tienes permiso para acceder a comprobantes de multas.',
+        );
+
         return $this->multasPagosService->descargarComprobanteMulta($vehiculo, $multa);
     }
 
@@ -88,6 +100,12 @@ class InventarioVehiculoController extends Controller
 
     public function registrarAbonoPago(Request $request, Vehiculo $vehiculo): RedirectResponse
     {
+        abort_unless(
+            $this->consultaService->puedeVerDatosFinancieros($request->user()),
+            403,
+            'No tienes permiso para registrar pagos o abonos.',
+        );
+
         $validated = $request->validate([
             'comprobante' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'monto' => ['required', 'numeric', 'gt:0'],
@@ -105,8 +123,14 @@ class InventarioVehiculoController extends Controller
         return back()->with('success', 'Comprobante y abono registrados correctamente.');
     }
 
-    public function comprobantePago(Vehiculo $vehiculo, PagoVehiculo $pago): StreamedResponse
+    public function comprobantePago(Request $request, Vehiculo $vehiculo, PagoVehiculo $pago): StreamedResponse
     {
+        abort_unless(
+            $this->consultaService->puedeVerDatosFinancieros($request->user()),
+            403,
+            'No tienes permiso para acceder a comprobantes de pago.',
+        );
+
         return $this->multasPagosService->descargarComprobantePago($vehiculo, $pago);
     }
 

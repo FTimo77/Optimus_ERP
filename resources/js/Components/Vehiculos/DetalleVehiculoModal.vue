@@ -39,6 +39,9 @@ const emit = defineEmits(['close']);
 
 const rtvInfo = computed(() => estadoCaducidadRtv(props.vehiculo.fecha_caducidad_revision));
 const metodoIngresoInfo = computed(() => infoMetodoIngreso(props.vehiculo.metodo_ingreso));
+const puedeVerDatosFinancieros = computed(() =>
+    Boolean(props.usuarioActual?.puede_ver_datos_financieros),
+);
 
 const manejarTecla = (e) => {
     if (e.key === 'Escape') {
@@ -73,24 +76,26 @@ onUnmounted(() => window.removeEventListener('keydown', manejarTecla));
                         >
                             Ingreso: {{ metodoIngresoInfo.etiqueta }}
                         </span>
-                        <span
-                            v-if="vehiculo.multas_pendientes_count > 0 && vehiculo.multas_requieren_revision_manual && Number(vehiculo.multas_pendientes_total || 0) <= 0"
-                            class="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-gray-900"
-                        >
-                            ⚠️ {{ vehiculo.multas_pendientes_count }} multa(s) · Revisión manual ($0.00)
-                        </span>
-                        <span
-                            v-else-if="vehiculo.multas_pendientes_count > 0"
-                            class="rounded-full bg-red-600 px-2.5 py-0.5 text-xs font-bold text-white"
-                        >
-                            ⚠️ {{ vehiculo.multas_pendientes_count }} multa(s) pendiente(s) · {{ formatearMoneda(vehiculo.multas_pendientes_total) }}{{ vehiculo.multas_requieren_revision_manual ? ' · Rev. manual' : '' }}
-                        </span>
-                        <span
-                            v-else
-                            class="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-semibold text-emerald-100"
-                        >
-                            ✅ Sin multas pendientes
-                        </span>
+                        <template v-if="puedeVerDatosFinancieros">
+                            <span
+                                v-if="vehiculo.multas_pendientes_count > 0 && vehiculo.multas_requieren_revision_manual && Number(vehiculo.multas_pendientes_total || 0) <= 0"
+                                class="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-gray-900"
+                            >
+                                ⚠️ {{ vehiculo.multas_pendientes_count }} multa(s) · Revisión manual ($0.00)
+                            </span>
+                            <span
+                                v-else-if="vehiculo.multas_pendientes_count > 0"
+                                class="rounded-full bg-red-600 px-2.5 py-0.5 text-xs font-bold text-white"
+                            >
+                                ⚠️ {{ vehiculo.multas_pendientes_count }} multa(s) pendiente(s) · {{ formatearMoneda(vehiculo.multas_pendientes_total) }}{{ vehiculo.multas_requieren_revision_manual ? ' · Rev. manual' : '' }}
+                            </span>
+                            <span
+                                v-else
+                                class="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-semibold text-emerald-100"
+                            >
+                                ✅ Sin multas pendientes
+                            </span>
+                        </template>
                         <span
                             :class="rtvInfo.clasesHeader"
                             class="rounded-full px-2.5 py-0.5 text-xs font-bold"
@@ -146,14 +151,20 @@ onUnmounted(() => window.removeEventListener('keydown', manejarTecla));
                     />
                 </div>
 
-                <DetalleInformacionGeneral :vehiculo="vehiculo" />
+                <DetalleInformacionGeneral
+                    :vehiculo="vehiculo"
+                    :puede-ver-datos-financieros="puedeVerDatosFinancieros"
+                />
 
                 <DetallePrecioVenta
                     :vehiculo="vehiculo"
                     :es-admin="Boolean(usuarioActual?.es_admin)"
                 />
 
-                <DetalleMultasVehiculo :vehiculo="vehiculo" />
+                <DetalleMultasVehiculo
+                    v-if="puedeVerDatosFinancieros"
+                    :vehiculo="vehiculo"
+                />
 
                 <DetalleCustodiaDocumentos
                     :vehiculo="vehiculo"
@@ -162,7 +173,10 @@ onUnmounted(() => window.removeEventListener('keydown', manejarTecla));
                     :usuario-actual="usuarioActual"
                 />
 
-                <DetallePagosVehiculo :vehiculo="vehiculo" />
+                <DetallePagosVehiculo
+                    v-if="puedeVerDatosFinancieros"
+                    :vehiculo="vehiculo"
+                />
             </div>
 
             <!-- Pie -->

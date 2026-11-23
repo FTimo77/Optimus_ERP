@@ -1,8 +1,5 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
-const path = require('path');
-
-const RUTA_COOKIES_CTE = path.join(__dirname, '..', '..', 'storage', 'app', 'cte_cookies.json');
 
 if (!process.env.PUPPETEER_CACHE_DIR && process.platform === 'win32') {
     process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\LENOVO\\.cache\\puppeteer';
@@ -112,8 +109,12 @@ function procesarRespuestaCTE(jsonCTE, placaBuscada, debugExtra) {
 }
 
 async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
-    const page = await browser.newPage();
+    const context = typeof browser.createBrowserContext === 'function'
+        ? await browser.createBrowserContext()
+        : null;
+    const page = context ? await context.newPage() : await browser.newPage();
     const urlsPostVistas = [];
+
     try {
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -124,20 +125,6 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
         const uaNativo = (await browser.userAgent()).replace(/HeadlessChrome/g, 'Chrome');
         await page.setUserAgent(uaNativo);
         await page.setViewport({ width: 1366, height: 768 });
-
-        // Reutilizamos las cookies/JSESSIONID guardadas de servicios.axiscloud.ec (compatible con Puppeteer v25)
-        try {
-            if (fs.existsSync(RUTA_COOKIES_CTE)) {
-                const cookiesGuardadas = JSON.parse(fs.readFileSync(RUTA_COOKIES_CTE, 'utf8'));
-                if (Array.isArray(cookiesGuardadas) && cookiesGuardadas.length > 0) {
-                    if (typeof browser.setCookie === 'function') {
-                        await browser.setCookie(...cookiesGuardadas);
-                    } else if (typeof page.setCookie === 'function') {
-                        await page.setCookie(...cookiesGuardadas);
-                    }
-                }
-            }
-        } catch (e) {}
 
         let resuelto = false;
         let resolvePromesa;
@@ -167,7 +154,7 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
             }
         });
 
-        // 1. Entramos por inicio.jsp?ps_empresa=16&ps_accion=P55 para inicializar la sesión y cargar el iframe autorizado
+        // 1. Entramos por inicio.jsp (que sí renderiza el formulario y autoriza el iframe) con sesión 100% limpia
         await page.goto('https://servicios.axiscloud.ec/AutoServicio/inicio.jsp?ps_empresa=16&ps_accion=P55', {
             waitUntil: 'networkidle2',
             timeout: 30000
@@ -193,7 +180,6 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
         await frameConsulta.waitForSelector('#valor_busqueda', { timeout: 10000 });
         await frameConsulta.waitForSelector('#boton_buscar', { timeout: 10000 });
 
-        // 3. Seleccionamos Placa ("PLA"), esperamos que el DOM actualice el input, ingresamos la placa y disparamos Buscar
         await frameConsulta.select('#filtro_busqueda', 'PLA');
         await new Promise(r => setTimeout(r, 400));
         await frameConsulta.click('#valor_busqueda', { clickCount: 3 });
@@ -212,24 +198,6 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
         await frameConsulta.click('#boton_buscar');
 
         const rawJson = await promesaJson;
-
-        // Guardamos las cookies vigentes de AxisCloud (compatible con Puppeteer v25) solo si la consulta fue válida
-        try {
-            const esErrorSesion = /sesiones permitidas/i.test(String(rawJson?.lsError || ''));
-            if (esErrorSesion) {
-                if (fs.existsSync(RUTA_COOKIES_CTE)) fs.unlinkSync(RUTA_COOKIES_CTE);
-            } else {
-                const todas = typeof browser.cookies === 'function'
-                    ? await browser.cookies()
-                    : await page.cookies('https://servicios.axiscloud.ec');
-                const cookiesAxis = (todas || []).filter(c => String(c.domain || '').includes('axiscloud.ec'));
-                if (cookiesAxis.length > 0) {
-                    fs.mkdirSync(path.dirname(RUTA_COOKIES_CTE), { recursive: true });
-                    fs.writeFileSync(RUTA_COOKIES_CTE, JSON.stringify(cookiesAxis, null, 2), 'utf8');
-                }
-            }
-        } catch (e) {}
-
         return procesarRespuestaCTE(rawJson, placaBuscada, { posts: urlsPostVistas });
     } catch (e) {
         return {
@@ -244,13 +212,13 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
         };
     } finally {
         await page.close().catch(() => {});
+        if (context) await context.close().catch(() => {});
     }
 }
 
 async function consultarMultasCTE(browser, placaBuscada) {
     let resultado = await ejecutarConsultaCTEUnIntento(browser, placaBuscada);
 
-    // Reintentar solo ante errores transitorios de red/DNS (no ante límite de sesiones)
     if (!resultado.ok && /ERR_NAME_NOT_RESOLVED|ERR_NETWORK_CHANGED|ERR_CONNECTION_RESET/i.test(String(resultado.error || ''))) {
         await new Promise(r => setTimeout(r, 2000));
         resultado = await ejecutarConsultaCTEUnIntento(browser, placaBuscada);

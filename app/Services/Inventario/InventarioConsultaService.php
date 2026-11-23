@@ -15,11 +15,20 @@ use ZipArchive;
 
 class InventarioConsultaService
 {
+    public function puedeVerDatosFinancieros(User $usuario): bool
+    {
+        return $usuario->hasRole('Administrador')
+            || $usuario->can('editar costo adquisicion')
+            || $usuario->can('ver reportes financieros');
+    }
+
     /**
      * @return array<string, mixed>
      */
     public function obtenerDatosDashboard(User $usuario): array
     {
+        $puedeVerFinancieros = $this->puedeVerDatosFinancieros($usuario);
+
         $vehiculos = Vehiculo::with([
             'marca',
             'clase',
@@ -47,13 +56,11 @@ class InventarioConsultaService
             ->unique('placa')
             ->keyBy('placa');
 
-        $this->sincronizarMultasDesdeAuditoria($vehiculos, $validacionesPorPlaca);
+        if ($puedeVerFinancieros) {
+            $this->sincronizarMultasDesdeAuditoria($vehiculos, $validacionesPorPlaca);
+        }
 
-        $vehiculos->load([
-            'multas' => fn ($query) => $query
-                ->with('pagador:id,name')
-                ->orderByRaw("CASE WHEN estado = 'pendiente' THEN 0 ELSE 1 END")
-                ->orderByDesc('id_multa'),
+        $relacionesDinamicas = [
             'custodias' => fn ($query) => $query
                 ->with([
                     'usuarioEntrega:id,name',
@@ -62,18 +69,56 @@ class InventarioConsultaService
                     'patioActual:id_patio,nombre',
                 ])
                 ->orderByDesc('id_custodia'),
-            'credito.registrador:id,name',
-            'pagos' => fn ($query) => $query->with('registrador:id,name')->orderBy('id_pago'),
-        ]);
+        ];
 
-        $vehiculos->each(function (Vehiculo $vehiculo) use ($validacionesPorPlaca): void {
-            $this->enriquecerVehiculo($vehiculo, $validacionesPorPlaca->get($vehiculo->id_vehiculo));
-        });
+        if ($puedeVerFinancieros) {
+            $relacionesDinamicas['multas'] = fn ($query) => $query
+                ->with('pagador:id,name')
+                ->orderByRaw("CASE WHEN estado = 'pendiente' THEN 0 ELSE 1 END")
+                ->orderByDesc('id_multa');
+            $relacionesDinamicas['credito.registrador:id,name'] = fn ($query) => $query;
+            $relacionesDinamicas['pagos'] = fn ($query) => $query
+                ->with('registrador:id,name')
+                ->orderBy('id_pago');
+        }
+
+        $vehiculos->load($relacionesDinamicas);
+
+        $vehiculosPayload = $vehiculos->map(function (Vehiculo $vehiculo) use ($validacionesPorPlaca, $puedeVerFinancieros): array {
+            $this->enriquecerVehiculo($vehiculo, $validacionesPorPlaca->get($vehiculo->id_vehiculo), $puedeVerFinancieros);
+
+            $data = $vehiculo->toArray();
+            $data['anio'] = $vehiculo->anio;
+            $data['precio_venta'] = $vehiculo->precio_venta !== null ? (float) $vehiculo->precio_venta : null;
+            $data['kilometraje'] = $vehiculo->kilometraje !== null ? (int) $vehiculo->kilometraje : null;
+
+            if (! $puedeVerFinancieros) {
+                unset(
+                    $data['costo_adquisicion'],
+                    $data['gastos_acumulados'],
+                    $data['multas'],
+                    $data['multas_detalle'],
+                    $data['multas_pendientes_count'],
+                    $data['multas_pendientes_total'],
+                    $data['multas_requieren_revision_manual'],
+                    $data['credito'],
+                    $data['credito_detalle'],
+                    $data['credito_vencido'],
+                    $data['pagos'],
+                    $data['pagos_detalle'],
+                    $data['total_pagado'],
+                    $data['saldo_pendiente_pago'],
+                    $data['forma_pago'],
+                );
+            }
+
+            return $data;
+        })->values();
 
         $usuario->load('patio:id_patio,nombre');
 
         return [
-            'vehiculos' => $vehiculos,
+            'vehiculos' => $vehiculosPayload,
             'patios' => Patio::query()->orderBy('nombre')->get(['id_patio', 'nombre']),
             'usuarios' => User::query()
                 ->with('patio:id_patio,nombre')
@@ -85,12 +130,16 @@ class InventarioConsultaService
                 'id_patio' => $usuario->id_patio,
                 'patio_nombre' => $usuario->patio?->nombre,
                 'es_admin' => $usuario->hasRole('Administrador'),
+                'puede_ver_datos_financieros' => $puedeVerFinancieros,
             ],
         ];
     }
 
-    private function enriquecerVehiculo(Vehiculo $vehiculo, ?ValidacionDocumento $validacion): void
-    {
+    private function enriquecerVehiculo(
+        Vehiculo $vehiculo,
+        ?ValidacionDocumento $validacion,
+        bool $puedeVerFinancieros,
+    ): void {
         $vehiculo->setAttribute(
             'imagen_url',
             $vehiculo->imagenPrincipal
@@ -113,9 +162,12 @@ class InventarioConsultaService
                 : null,
         );
 
-        $this->adjuntarIndicadoresMultas($vehiculo);
+        if ($puedeVerFinancieros) {
+            $this->adjuntarIndicadoresMultas($vehiculo);
+            $this->adjuntarIndicadoresPagosYCredito($vehiculo, $validacion);
+        }
+
         $this->adjuntarIndicadoresCustodia($vehiculo, $validacion);
-        $this->adjuntarIndicadoresPagosYCredito($vehiculo, $validacion);
         $this->adjuntarIndicadoresContrato($vehiculo, $validacion);
     }
 

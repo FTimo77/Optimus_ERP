@@ -13,7 +13,16 @@ const props = defineProps({
         type: Object,
         required: true,
     },
+    puedeVerDatosFinancieros: {
+        type: Boolean,
+        default: false,
+    },
 });
+
+const formatearKilometraje = (km) =>
+    km !== null && km !== undefined && km !== ''
+        ? `${Number(km).toLocaleString('es-EC')} km`
+        : 'No registrado';
 
 const contratoForm = useForm({
     contrato: null,
@@ -66,8 +75,12 @@ const subirContratoVehiculo = () => {
                     <tr>
                         <th class="bg-gray-50 px-4 py-2.5 text-left font-semibold text-gray-600">Año</th>
                         <td class="px-4 py-2.5 text-gray-900">{{ vehiculo.anio }}</td>
+                        <th class="bg-gray-50 px-4 py-2.5 text-left font-semibold text-gray-600">Kilometraje</th>
+                        <td class="px-4 py-2.5 text-gray-900">{{ formatearKilometraje(vehiculo.kilometraje) }}</td>
+                    </tr>
+                    <tr v-if="puedeVerDatosFinancieros">
                         <th class="bg-gray-50 px-4 py-2.5 text-left font-semibold text-gray-600">Precio de adquisición</th>
-                        <td class="px-4 py-2.5 font-bold text-gray-900">{{ formatearMoneda(vehiculo.costo_adquisicion) }}</td>
+                        <td colspan="3" class="px-4 py-2.5 font-bold text-gray-900">{{ formatearMoneda(vehiculo.costo_adquisicion) }}</td>
                     </tr>
                     <tr>
                         <th class="bg-gray-50 px-4 py-2.5 text-left font-semibold text-gray-600">Estado del sistema</th>
