@@ -38,6 +38,7 @@ class Vehiculo extends Model
         'kilometraje',
         'costo_adquisicion',
         'precio_venta',
+        'precio_final',
         'ruta_matricula',
         'fecha_revision',
         'fecha_caducidad_revision',

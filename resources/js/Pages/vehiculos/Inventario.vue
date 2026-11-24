@@ -93,38 +93,38 @@ const cerrarDetalles = () => {
             </div>
         </template>
 
-        <div class="py-4">
-            <div class="mx-auto max-w-[97%] space-y-2.5 px-2 sm:px-3 lg:px-4">
+        <div class="py-3">
+            <div class="mx-auto w-full max-w-full space-y-2 px-2 sm:px-4">
                 <div
                     v-if="success"
                     role="status"
-                    class="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs font-medium text-green-800"
+                    class="rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-800"
                 >
                     {{ success }}
                 </div>
 
-                <!-- BARRA DE FILTROS MULTICRITERIO Y BÚSQUEDA (COMPACTA) -->
-                <div class="space-y-2 rounded-lg border border-gray-200 bg-white p-2.5 shadow-xs">
-                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
-                        <div class="lg:col-span-2">
-                            <label for="filtro-busqueda" class="block text-[11px] font-semibold text-gray-700">
-                                Buscar por placa, marca o modelo
+                <!-- BARRA DE FILTROS MULTICRITERIO Y BÚSQUEDA (ALTA DENSIDAD) -->
+                <div class="rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-xs">
+                    <div class="grid grid-cols-2 items-end gap-2 sm:grid-cols-3 lg:grid-cols-12">
+                        <div class="col-span-2 sm:col-span-3 lg:col-span-3">
+                            <label for="filtro-busqueda" class="block text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                                Buscar placa, marca o modelo
                             </label>
                             <input
                                 id="filtro-busqueda"
                                 v-model="busqueda"
                                 type="search"
                                 placeholder="Ej. PBA1234 o Toyota Corolla..."
-                                class="mt-0.5 block w-full rounded-md border-gray-300 px-2.5 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
+                                class="mt-0.5 block w-full rounded border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
                             />
                         </div>
 
-                        <div>
-                            <label for="filtro-marca" class="block text-[11px] font-semibold text-gray-700">Marca</label>
+                        <div class="lg:col-span-2">
+                            <label for="filtro-marca" class="block text-[10px] font-semibold uppercase tracking-wide text-gray-600">Marca</label>
                             <select
                                 id="filtro-marca"
                                 v-model="filtroMarca"
-                                class="mt-0.5 block w-full rounded-md border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
+                                class="mt-0.5 block w-full rounded border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
                             >
                                 <option value="">Todas</option>
                                 <option v-for="marca in marcasDisponibles" :key="marca" :value="marca">
@@ -133,12 +133,12 @@ const cerrarDetalles = () => {
                             </select>
                         </div>
 
-                        <div>
-                            <label for="filtro-estado" class="block text-[11px] font-semibold text-gray-700">Estado</label>
+                        <div class="lg:col-span-2">
+                            <label for="filtro-estado" class="block text-[10px] font-semibold uppercase tracking-wide text-gray-600">Estado</label>
                             <select
                                 id="filtro-estado"
                                 v-model="filtroEstado"
-                                class="mt-0.5 block w-full rounded-md border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
+                                class="mt-0.5 block w-full rounded border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
                             >
                                 <option value="">Todos</option>
                                 <option v-for="estado in estadosDisponibles" :key="estado" :value="estado">
@@ -147,12 +147,12 @@ const cerrarDetalles = () => {
                             </select>
                         </div>
 
-                        <div>
-                            <label for="filtro-patio" class="block text-[11px] font-semibold text-gray-700">Patio</label>
+                        <div class="lg:col-span-1">
+                            <label for="filtro-patio" class="block text-[10px] font-semibold uppercase tracking-wide text-gray-600">Patio</label>
                             <select
                                 id="filtro-patio"
                                 v-model="filtroPatio"
-                                class="mt-0.5 block w-full rounded-md border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
+                                class="mt-0.5 block w-full rounded border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
                             >
                                 <option value="">Todos</option>
                                 <option v-for="patio in patiosDisponibles" :key="patio" :value="patio">
@@ -161,12 +161,12 @@ const cerrarDetalles = () => {
                             </select>
                         </div>
 
-                        <div>
-                            <label for="filtro-metodo-ingreso" class="block text-[11px] font-semibold text-gray-700">Método de ingreso</label>
+                        <div class="lg:col-span-1">
+                            <label for="filtro-metodo-ingreso" class="block text-[10px] font-semibold uppercase tracking-wide text-gray-600">Ingreso</label>
                             <select
                                 id="filtro-metodo-ingreso"
                                 v-model="filtroMetodoIngreso"
-                                class="mt-0.5 block w-full rounded-md border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
+                                class="mt-0.5 block w-full rounded border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
                             >
                                 <option value="">Todos</option>
                                 <option value="particular">Particular</option>
@@ -174,58 +174,55 @@ const cerrarDetalles = () => {
                                 <option value="nuevos">Nuevos</option>
                             </select>
                         </div>
-                    </div>
 
-                    <div class="flex flex-col justify-between gap-2 border-t border-gray-100 pt-2 sm:flex-row sm:items-center">
-                        <div class="flex flex-wrap items-center gap-3">
-                            <div class="flex items-center gap-1.5">
-                                <label for="filtro-alerta" class="text-[11px] font-semibold text-gray-700">Alerta:</label>
-                                <select
-                                    id="filtro-alerta"
-                                    v-model="filtroAlerta"
-                                    class="rounded-md border-gray-300 px-2 py-0.5 text-[11px] shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
-                                >
-                                    <option value="">Todas</option>
-                                    <option value="en_alerta">En alerta</option>
-                                    <option value="sin_alerta">Sin alerta / Vigente</option>
-                                </select>
-                            </div>
-                            <span class="text-[11px] text-gray-600">
-                                Mostrando <strong class="text-gray-900">{{ vehiculosFiltrados.length }}</strong> de
-                                <strong class="text-gray-900">{{ vehiculos.length }}</strong> vehículo(s)
-                            </span>
+                        <div class="lg:col-span-1">
+                            <label for="filtro-alerta" class="block text-[10px] font-semibold uppercase tracking-wide text-gray-600">Alerta</label>
+                            <select
+                                id="filtro-alerta"
+                                v-model="filtroAlerta"
+                                class="mt-0.5 block w-full rounded border-gray-300 px-2 py-1 text-xs shadow-xs focus:border-yellow-500 focus:ring-yellow-500"
+                            >
+                                <option value="">Todas</option>
+                                <option value="en_alerta">En alerta</option>
+                                <option value="sin_alerta">Sin alerta</option>
+                            </select>
                         </div>
 
-                        <button
-                            type="button"
-                            :disabled="!hayFiltrosActivos"
-                            class="w-fit rounded-md border border-gray-300 bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            @click="limpiarFiltros"
-                        >
-                            Limpiar filtros
-                        </button>
+                        <div class="col-span-2 flex items-center justify-between gap-2 sm:col-span-3 lg:col-span-2 lg:justify-end">
+                            <span class="whitespace-nowrap text-[11px] text-gray-600">
+                                <strong class="text-gray-900">{{ vehiculosFiltrados.length }}</strong>/{{ vehiculos.length }}
+                            </span>
+                            <button
+                                type="button"
+                                :disabled="!hayFiltrosActivos"
+                                class="whitespace-nowrap rounded border border-gray-300 bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                @click="limpiarFiltros"
+                            >
+                                Limpiar
+                            </button>
+                        </div>
                     </div>
                 </div>
 
                 <!-- TABLA PRINCIPAL DEL INVENTARIO (ALTA DENSIDAD) -->
                 <div class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xs">
                     <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200 text-[11px]">
+                        <table class="w-full table-auto divide-y divide-gray-200 text-[11px]">
                             <thead class="bg-gray-900 text-white">
                                 <tr>
-                                    <th class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Placa</th>
-                                    <th class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Marca</th>
-                                    <th class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Modelo</th>
-                                    <th v-if="!puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Año</th>
-                                    <th v-if="!puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Kilometraje</th>
-                                    <th v-if="!puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Precio Venta</th>
-                                    <th class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Ubicación</th>
-                                    <th class="max-w-[115px] whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Contrato</th>
-                                    <th v-if="puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Pagos / Multas</th>
-                                    <th class="whitespace-nowrap px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider">Llaves</th>
-                                    <th class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Documentación</th>
-                                    <th class="whitespace-nowrap px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Estado</th>
-                                    <th class="whitespace-nowrap px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider">Detalle</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Placa</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Marca</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Modelo</th>
+                                    <th v-if="!puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Año</th>
+                                    <th v-if="!puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Kilometraje</th>
+                                    <th v-if="!puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Precio Venta</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Ubicación</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Contrato</th>
+                                    <th v-if="puedeVerDatosFinancieros" class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Pagos / Multas</th>
+                                    <th class="whitespace-nowrap px-1.5 py-1.5 text-center text-[10px] font-bold uppercase tracking-wider">Llaves</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Documentación</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider">Estado</th>
+                                    <th class="whitespace-nowrap px-2 py-1.5 text-center text-[10px] font-bold uppercase tracking-wider">Detalle</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100 bg-white">
@@ -241,7 +238,7 @@ const cerrarDetalles = () => {
                                     <td class="whitespace-nowrap px-2 py-1.5 text-xs font-bold text-gray-900">
                                         {{ auto.marca?.nombre || 'No registrada' }}
                                     </td>
-                                    <td class="max-w-[180px] px-2 py-1.5 text-gray-900">
+                                    <td class="max-w-[160px] px-2 py-1.5 text-gray-900">
                                         <div class="truncate text-xs font-semibold leading-tight" :title="auto.modelo">
                                             {{ auto.modelo }}
                                         </div>
@@ -263,10 +260,10 @@ const cerrarDetalles = () => {
                                             Por definir
                                         </span>
                                     </td>
-                                    <td class="whitespace-nowrap px-2 py-1.5 text-[11px] text-gray-700">
+                                    <td class="max-w-[115px] truncate whitespace-nowrap px-2 py-1.5 text-[11px] text-gray-700" :title="auto.patio?.nombre || 'Sin asignar'">
                                         {{ auto.patio?.nombre || 'Sin asignar' }}
                                     </td>
-                                    <td class="max-w-[115px] px-2 py-1.5">
+                                    <td class="max-w-[110px] px-2 py-1.5">
                                         <span
                                             v-if="auto.tipo_contrato?.nombre || auto.tipo_contrato_nombre"
                                             class="inline-flex max-w-full truncate rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold leading-tight text-indigo-800"
@@ -277,42 +274,42 @@ const cerrarDetalles = () => {
                                         <span v-else class="text-[10px] text-gray-400">Sin asignar</span>
                                     </td>
                                     <td v-if="puedeVerDatosFinancieros" class="px-2 py-1.5">
-                                        <div class="flex flex-col items-start gap-0.5">
+                                        <div class="flex flex-wrap items-center gap-1">
                                             <template v-if="tieneAlertaPagosMultas(auto)">
                                                 <span
                                                     v-if="auto.multas_pendientes_count > 0 && auto.multas_requieren_revision_manual && Number(auto.multas_pendientes_total || 0) <= 0"
-                                                    class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-bold leading-tight text-amber-900"
+                                                    class="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold leading-tight text-amber-900"
                                                 >
-                                                    ⚠️ {{ auto.multas_pendientes_count }} multa(s) · Rev. ($0)
+                                                    ⚠️ {{ auto.multas_pendientes_count }} multa(s) · Rev.
                                                 </span>
                                                 <span
                                                     v-else-if="auto.multas_pendientes_count > 0"
-                                                    class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-bold leading-tight text-red-800"
+                                                    class="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-red-300 bg-red-100 px-1.5 py-0.5 text-[10px] font-bold leading-tight text-red-800"
                                                 >
-                                                    ⚠️ {{ auto.multas_pendientes_count }} multa(s) · {{ formatearMoneda(auto.multas_pendientes_total) }}{{ auto.multas_requieren_revision_manual ? ' · Rev.' : '' }}
+                                                    ⚠️ {{ auto.multas_pendientes_count }} · {{ formatearMoneda(auto.multas_pendientes_total) }}
                                                 </span>
                                                 <span
                                                     v-if="auto.credito_vencido"
-                                                    class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-bold leading-tight text-red-800"
+                                                    class="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-red-300 bg-red-100 px-1.5 py-0.5 text-[10px] font-bold leading-tight text-red-800"
                                                 >
-                                                    🚨 Crédito vencido
+                                                    🚨 Créd. vencido
                                                 </span>
                                                 <span
                                                     v-if="Number(auto.saldo_pendiente_pago || 0) > 0.009"
-                                                    class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-bold leading-tight text-amber-900"
+                                                    class="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold leading-tight text-amber-900"
                                                 >
-                                                    ⏳ Saldo: {{ formatearMoneda(auto.saldo_pendiente_pago) }}
+                                                    ⏳ {{ formatearMoneda(auto.saldo_pendiente_pago) }}
                                                 </span>
                                             </template>
                                             <span
                                                 v-else
-                                                class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-semibold leading-tight text-green-700"
+                                                class="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-semibold leading-tight text-green-700"
                                             >
                                                 ✅ Al día
                                             </span>
                                         </div>
                                     </td>
-                                    <td class="whitespace-nowrap px-2 py-1.5 text-center">
+                                    <td class="whitespace-nowrap px-1.5 py-1.5 text-center">
                                         <span
                                             v-if="auto.entrega_llaves_solicitada"
                                             class="inline-flex items-center rounded-full border border-green-300 bg-green-100 px-2 py-0.5 text-[10px] font-bold leading-tight text-green-800"
@@ -326,13 +323,13 @@ const cerrarDetalles = () => {
                                             No
                                         </span>
                                     </td>
-                                    <td class="px-2 py-1.5">
+                                    <td class="max-w-[210px] px-2 py-1.5">
                                         <div v-if="documentosFaltantes(auto).length === 0">
-                                            <span class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-semibold leading-tight text-green-700">
+                                            <span class="inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-semibold leading-tight text-green-700">
                                                 ✅ Completo
                                             </span>
                                         </div>
-                                        <div v-else class="flex flex-wrap gap-1">
+                                        <div v-else class="flex flex-wrap gap-0.5">
                                             <span
                                                 v-for="faltante in documentosFaltantes(auto)"
                                                 :key="faltante.texto"
@@ -341,7 +338,7 @@ const cerrarDetalles = () => {
                                                     ? 'border-red-300 bg-red-100 text-red-800'
                                                     : 'border-amber-300 bg-amber-100 text-amber-900'"
                                             >
-                                                Falta: {{ faltante.texto }}
+                                                {{ faltante.texto }}
                                             </span>
                                         </div>
                                     </td>
@@ -351,7 +348,7 @@ const cerrarDetalles = () => {
                                         </span>
                                     </td>
                                     <td class="whitespace-nowrap px-2 py-1.5 text-center">
-                                        <span class="inline-flex items-center rounded bg-gray-900 px-2 py-1 text-[10px] font-bold text-yellow-400 hover:bg-gray-700">
+                                        <span class="inline-flex items-center rounded bg-gray-900 px-2 py-0.5 text-[10px] font-bold text-yellow-400 hover:bg-gray-700">
                                             Ficha &rarr;
                                         </span>
                                     </td>

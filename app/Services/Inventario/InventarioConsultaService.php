@@ -22,6 +22,21 @@ class InventarioConsultaService
             || $usuario->can('ver reportes financieros');
     }
 
+    public function puedeSubirContrato(User $usuario): bool
+    {
+        return $usuario->hasAnyRole([
+            'Administracion',
+            'Administración',
+            'Administrativo',
+            'Administrador',
+        ]);
+    }
+
+    public function puedeTransferirPatio(User $usuario): bool
+    {
+        return $usuario->hasAnyRole(['Vendedor', 'Jefe de Patio', 'Administrador']);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -49,7 +64,7 @@ class InventarioConsultaService
         $placas = $vehiculos->pluck('id_vehiculo')->all();
 
         $validacionesPorPlaca = ValidacionDocumento::query()
-            ->with(['subidor:id,name', 'tipoContrato:id_tipo_contrato,nombre,requiere_documento'])
+            ->with(['subidor:id,name', 'tipoContrato'])
             ->whereIn('placa', $placas)
             ->orderByDesc('id')
             ->get()
@@ -76,7 +91,7 @@ class InventarioConsultaService
                 ->with('pagador:id,name')
                 ->orderByRaw("CASE WHEN estado = 'pendiente' THEN 0 ELSE 1 END")
                 ->orderByDesc('id_multa');
-            $relacionesDinamicas['credito.registrador:id,name'] = fn ($query) => $query;
+            $relacionesDinamicas[] = 'credito.registrador:id,name';
             $relacionesDinamicas['pagos'] = fn ($query) => $query
                 ->with('registrador:id,name')
                 ->orderBy('id_pago');
@@ -90,6 +105,7 @@ class InventarioConsultaService
             $data = $vehiculo->toArray();
             $data['anio'] = $vehiculo->anio;
             $data['precio_venta'] = $vehiculo->precio_venta !== null ? (float) $vehiculo->precio_venta : null;
+            $data['precio_final'] = $vehiculo->precio_final !== null ? (float) $vehiculo->precio_final : null;
             $data['kilometraje'] = $vehiculo->kilometraje !== null ? (int) $vehiculo->kilometraje : null;
 
             if (! $puedeVerFinancieros) {
@@ -131,6 +147,8 @@ class InventarioConsultaService
                 'patio_nombre' => $usuario->patio?->nombre,
                 'es_admin' => $usuario->hasRole('Administrador'),
                 'puede_ver_datos_financieros' => $puedeVerFinancieros,
+                'puede_subir_contrato' => $this->puedeSubirContrato($usuario),
+                'puede_transferir_patio' => $this->puedeTransferirPatio($usuario),
             ],
         ];
     }
@@ -169,6 +187,7 @@ class InventarioConsultaService
 
         $this->adjuntarIndicadoresCustodia($vehiculo, $validacion);
         $this->adjuntarIndicadoresContrato($vehiculo, $validacion);
+        $this->adjuntarExpedienteDocumental($vehiculo, $validacion, $puedeVerFinancieros);
     }
 
     private function adjuntarIndicadoresMultas(Vehiculo $vehiculo): void
@@ -282,24 +301,117 @@ class InventarioConsultaService
         $tipoContrato = $vehiculo->tipoContrato ?? $validacion?->tipoContrato;
         $tipoContratoNombre = $tipoContrato?->nombre;
         $requiereDocContrato = $tipoContrato !== null ? (bool) $tipoContrato->requiere_documento : false;
+        $cantidadContratosRequeridos = $tipoContrato !== null ? $tipoContrato->cantidadDocumentosRequeridos() : 0;
+        $esDobleContrato = $cantidadContratosRequeridos >= 2;
 
         $rutaContratoDoc = $vehiculo->documentos?->ruta_contrato;
         $tieneContratoCargado = is_string($rutaContratoDoc)
             && trim($rutaContratoDoc) !== ''
             && Storage::disk('local')->exists($rutaContratoDoc);
 
+        $rutaContratoDoc2 = $vehiculo->documentos?->ruta_contrato_2;
+        $tieneContrato2Cargado = is_string($rutaContratoDoc2)
+            && trim($rutaContratoDoc2) !== ''
+            && Storage::disk('local')->exists($rutaContratoDoc2);
+
+        $contratosCompletos = ! $requiereDocContrato
+            || ($esDobleContrato ? ($tieneContratoCargado && $tieneContrato2Cargado) : $tieneContratoCargado);
+
         $vehiculo->setAttribute('tipo_contrato_nombre', $tipoContratoNombre);
         $vehiculo->setAttribute('requiere_documento_contrato', $requiereDocContrato);
+        $vehiculo->setAttribute('cantidad_contratos_requeridos', $cantidadContratosRequeridos);
+        $vehiculo->setAttribute('es_doble_contrato', $esDobleContrato);
         $vehiculo->setAttribute('tiene_contrato_cargado', $tieneContratoCargado);
+        $vehiculo->setAttribute('tiene_contrato_2_cargado', $tieneContrato2Cargado);
         $vehiculo->setAttribute(
             'contrato_cantidad_hojas',
             $tieneContratoCargado ? $this->contarHojasDocumento($rutaContratoDoc) : null,
         );
-        $vehiculo->setAttribute('contrato_pendiente', $requiereDocContrato && ! $tieneContratoCargado);
+        $vehiculo->setAttribute(
+            'contrato_2_cantidad_hojas',
+            $tieneContrato2Cargado ? $this->contarHojasDocumento($rutaContratoDoc2) : null,
+        );
+        $vehiculo->setAttribute('contratos_completos', $contratosCompletos);
+        $vehiculo->setAttribute('contrato_pendiente', $requiereDocContrato && ! $contratosCompletos);
         $vehiculo->setAttribute(
             'contrato_archivo_url',
-            $tieneContratoCargado ? route('vehiculos.contrato.descargar', $vehiculo->id_vehiculo) : null,
+            $tieneContratoCargado ? route('vehiculos.contrato.descargar', [$vehiculo->id_vehiculo, 'numero' => 1]) : null,
         );
+        $vehiculo->setAttribute(
+            'contrato_2_archivo_url',
+            $tieneContrato2Cargado ? route('vehiculos.contrato.descargar', [$vehiculo->id_vehiculo, 'numero' => 2]) : null,
+        );
+    }
+
+    private function adjuntarExpedienteDocumental(
+        Vehiculo $vehiculo,
+        ?ValidacionDocumento $validacion,
+        bool $puedeVerFinancieros,
+    ): void {
+        $doc = $vehiculo->documentos;
+        $esNuevo = strtolower(trim((string) ($vehiculo->metodo_ingreso ?? ''))) === 'nuevos';
+
+        $rutas = [
+            'matricula' => ['Matrícula', $doc?->ruta_matricula ?? $validacion?->ruta_documento],
+            'cuv' => ['CUV', $doc?->ruta_cuv ?? $validacion?->ruta_cuv],
+            'revision' => ['Revisión (RTV / Inspección)', $doc?->ruta_revision],
+            'factura' => ['Factura', $doc?->ruta_factura],
+            'contrato' => ['Contrato', $doc?->ruta_contrato ?? $validacion?->ruta_contrato_generado],
+            'contrato_2' => ['Contrato 2 (Doble Contrato)', $doc?->ruta_contrato_2],
+            'cedula' => ['Cédula del Titular', $validacion?->ruta_cedula_cliente],
+            'constancia' => ['Constancia', $doc?->ruta_constancia],
+            'acta_entrega' => ['Acta de Entrega', $doc?->ruta_acta_entrega],
+            'impronta' => ['Impronta', $doc?->ruta_impronta],
+        ];
+
+        if ($puedeVerFinancieros) {
+            $rutas['comprobante_pago'] = [
+                'Comprobante de Pago',
+                $doc?->ruta_comprobante_pago ?? $validacion?->ruta_comprobante_pago,
+            ];
+        }
+
+        $expediente = [];
+        foreach ($rutas as $clave => [$nombre, $ruta]) {
+            $disponible = is_string($ruta)
+                && trim($ruta) !== ''
+                && Storage::disk('local')->exists($ruta);
+
+            if ($disponible) {
+                $expediente[] = [
+                    'clave' => $clave,
+                    'nombre' => $nombre,
+                    'disponible' => true,
+                    'ver_url' => route('vehiculos.documentos.descargar', [$vehiculo->id_vehiculo, $clave, 'inline' => 1]),
+                    'descargar_url' => route('vehiculos.documentos.descargar', [$vehiculo->id_vehiculo, $clave]),
+                ];
+            }
+        }
+
+        $documentosNuevo = [];
+        if ($esNuevo) {
+            foreach (['matricula' => 'Matrícula', 'revision' => 'Revisión (RTV / Inspección)', 'factura' => 'Factura'] as $clave => $nombre) {
+                $ruta = $rutas[$clave][1] ?? null;
+                $disponible = is_string($ruta)
+                    && trim($ruta) !== ''
+                    && Storage::disk('local')->exists($ruta);
+
+                $documentosNuevo[] = [
+                    'clave' => $clave,
+                    'nombre' => $nombre,
+                    'disponible' => $disponible,
+                    'ver_url' => $disponible
+                        ? route('vehiculos.documentos.descargar', [$vehiculo->id_vehiculo, $clave, 'inline' => 1])
+                        : null,
+                    'descargar_url' => $disponible
+                        ? route('vehiculos.documentos.descargar', [$vehiculo->id_vehiculo, $clave])
+                        : null,
+                ];
+            }
+        }
+
+        $vehiculo->setAttribute('documentos_expediente', $expediente);
+        $vehiculo->setAttribute('documentos_nuevo', $documentosNuevo);
     }
 
     private function contarHojasDocumento(string $ruta): ?int

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\InventarioVehiculoController;
+use App\Http\Controllers\MisVentasController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\UsuarioController;
 use App\Http\Controllers\ValidacionDocumentosController;
@@ -34,6 +35,8 @@ Route::middleware(['auth'])->group(function () {
         ->name('vehiculos.custodia.solicitar');
     Route::patch('/vehiculos/{vehiculo}/custodia/{custodia}/recibir', [InventarioVehiculoController::class, 'confirmarRecepcionCustodia'])
         ->name('vehiculos.custodia.recibir');
+    Route::post('/vehiculos/{vehiculo}/transferencia-patio', [InventarioVehiculoController::class, 'transferirPatio'])
+        ->name('vehiculos.transferencia.patio');
     Route::post('/vehiculos/{vehiculo}/pagos/abono', [InventarioVehiculoController::class, 'registrarAbonoPago'])
         ->name('vehiculos.pagos.abono');
     Route::get('/vehiculos/{vehiculo}/pagos/{pago}/comprobante', [InventarioVehiculoController::class, 'comprobantePago'])
@@ -42,6 +45,10 @@ Route::middleware(['auth'])->group(function () {
         ->name('vehiculos.contrato.store');
     Route::get('/vehiculos/{vehiculo}/contrato-legalizado', [InventarioVehiculoController::class, 'descargarContrato'])
         ->name('vehiculos.contrato.descargar');
+    Route::get('/vehiculos/{vehiculo}/documentos/{tipo}', [InventarioVehiculoController::class, 'descargarDocumento'])
+        ->name('vehiculos.documentos.descargar');
+    Route::post('/vehiculos/{vehiculo}/documentos-nuevo', [InventarioVehiculoController::class, 'subirDocumentoVehiculoNuevo'])
+        ->name('vehiculos.documentos.nuevo.store');
     Route::patch('/vehiculos/{vehiculo}/precio-venta', [InventarioVehiculoController::class, 'actualizarPrecioVenta'])
         ->name('vehiculos.precio-venta.update');
 
@@ -97,6 +104,36 @@ Route::middleware(['auth'])->group(function () {
         ->name('usuarios.index');
     Route::patch('/usuarios/{user}/rol', [UsuarioController::class, 'actualizarRol'])
         ->name('usuarios.rol.update');
+
+    // 4. MÓDULO DE MIS VENTAS Y RESERVAS (Vendedor / Administrador)
+    Route::get('/mis-ventas', [MisVentasController::class, 'index'])
+        ->name('mis-ventas.index');
+    Route::post('/mis-ventas/iniciar/{vehiculo}', [MisVentasController::class, 'iniciar'])
+        ->name('mis-ventas.iniciar');
+    Route::get('/mis-ventas/{venta}', [MisVentasController::class, 'show'])
+        ->name('mis-ventas.show');
+    Route::patch('/mis-ventas/{venta}/operacion', [MisVentasController::class, 'actualizarOperacion'])
+        ->name('mis-ventas.operacion.update');
+    Route::post('/mis-ventas/{venta}/solicitar-descuento', [MisVentasController::class, 'solicitarAprobacionDescuento'])
+        ->name('mis-ventas.descuento.solicitar');
+    Route::patch('/mis-ventas/{venta}/decidir-descuento', [MisVentasController::class, 'decidirDescuento'])
+        ->name('mis-ventas.descuento.decidir');
+    Route::patch('/mis-ventas/{venta}/decidir-credito', [MisVentasController::class, 'decidirCredito'])
+        ->name('mis-ventas.credito.decidir');
+    Route::post('/mis-ventas/{venta}/forma-pago', [MisVentasController::class, 'registrarFormaPago'])
+        ->name('mis-ventas.pago.store');
+    Route::post('/mis-ventas/{venta}/pagos/abono', [MisVentasController::class, 'registrarAbonoCuota'])
+        ->name('mis-ventas.pago.abono');
+    Route::get('/mis-ventas/{venta}/pagos/{pago}/comprobante', [MisVentasController::class, 'descargarComprobantePago'])
+        ->name('mis-ventas.pago.comprobante');
+    Route::post('/mis-ventas/{venta}/escanear-cedula', [MisVentasController::class, 'escanearCedula'])
+        ->name('mis-ventas.escanear.cedula');
+    Route::post('/mis-ventas/{venta}/generar-constancia', [MisVentasController::class, 'generarConstancia'])
+        ->name('mis-ventas.generar.constancia');
+    Route::get('/mis-ventas/{venta}/constancia', [MisVentasController::class, 'descargarConstancia'])
+        ->name('mis-ventas.constancia');
+    Route::get('/mis-ventas/{venta}/cedula', [MisVentasController::class, 'descargarCedula'])
+        ->name('mis-ventas.cedula');
 });
 
 Route::middleware('auth')->group(function () {

@@ -1530,6 +1530,8 @@ class ValidacionDocumentosController extends Controller
 
     public function escanearCedula(Request $request, ValidacionDocumento $validacion): JsonResponse
     {
+        set_time_limit(120);
+
         $request->validate([
             'documento_cedula' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
         ]);
@@ -1545,14 +1547,6 @@ class ValidacionDocumentosController extends Controller
             ], 422);
         }
 
-        $apiKey = config('services.gemini.api_key');
-        if (! is_string($apiKey) || trim($apiKey) === '') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Gemini no está configurado. Define GEMINI_API_KEY en .env y limpia la caché de configuración.',
-            ], 503);
-        }
-
         $rutaAnterior = $validacion->ruta_cedula_cliente;
         $rutaCedula = $archivo->store('documentos/cedulas', 'local');
 
@@ -1561,6 +1555,30 @@ class ValidacionDocumentosController extends Controller
                 'success' => false,
                 'message' => 'No se pudo almacenar la cédula escaneada.',
             ], 500);
+        }
+
+        // Persistimos siempre el archivo privado en el expediente, incluso si Gemini falla
+        $validacion->update([
+            'ruta_cedula_cliente' => $rutaCedula,
+        ]);
+
+        if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula && Storage::disk('local')->exists($rutaAnterior)) {
+            Storage::disk('local')->delete($rutaAnterior);
+        }
+
+        $cedulaUrl = route('validacion-documentos.cedula', $validacion);
+        $respuestaSinOcr = static fn (string $motivo): JsonResponse => response()->json([
+            'success' => true,
+            'cedula_guardada' => true,
+            'ocr_fallo' => true,
+            'warning' => "{$motivo} El archivo de la cédula sí se almacenó correctamente en el sistema; puedes completar los datos manualmente para generar la constancia.",
+            'ruta_cedula_cliente' => $rutaCedula,
+            'cedula_url' => $cedulaUrl,
+        ]);
+
+        $apiKey = config('services.gemini.api_key');
+        if (! is_string($apiKey) || trim($apiKey) === '') {
+            return $respuestaSinOcr('Gemini no está configurado (GEMINI_API_KEY ausente).');
         }
 
         $base64Data = null;
@@ -1627,47 +1645,28 @@ class ValidacionDocumentosController extends Controller
         try {
             $respuestaGemini = $this->ejecutarEscaneoGemini($apiKey, $payload);
         } catch (Throwable $exception) {
-            Storage::disk('local')->delete($rutaCedula);
-            Log::warning('Error al escanear cédula con escanear_gemini.cjs.', [
+            Log::warning('Error al escanear cédula con escanear_gemini.cjs (archivo conservado en disco privado).', [
                 'validacion_id' => $validacion->id,
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json([
-                'success' => false,
-                'message' => 'No se pudo completar el escaneo de la cédula con Gemini: '.$exception->getMessage(),
-            ], 502);
+            return $respuestaSinOcr('Gemini no respondió al intentar analizar la cédula ('.$exception->getMessage().').');
         }
 
         if (isset($respuestaGemini['error']['message'])) {
-            Storage::disk('local')->delete($rutaCedula);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Gemini devolvió un error al escanear la cédula: '.$respuestaGemini['error']['message'],
-            ], 502);
+            return $respuestaSinOcr('Gemini devolvió un error al analizar la cédula ('.$respuestaGemini['error']['message'].').');
         }
 
         $textoJson = $respuestaGemini['candidates'][0]['content']['parts'][0]['text'] ?? null;
         if (! is_string($textoJson) || trim($textoJson) === '') {
-            Storage::disk('local')->delete($rutaCedula);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Gemini no devolvió datos legibles de la cédula. Intenta con una foto más nítida.',
-            ], 422);
+            return $respuestaSinOcr('Gemini no devolvió datos legibles de la cédula.');
         }
 
         $textoLimpio = preg_replace('/^```(?:json)?\s*|\s*```$/i', '', trim($textoJson)) ?? trim($textoJson);
         $datosExtraidos = json_decode($textoLimpio, true);
 
         if (! is_array($datosExtraidos)) {
-            Storage::disk('local')->delete($rutaCedula);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'La respuesta de Gemini no tiene un formato JSON válido.',
-            ], 422);
+            return $respuestaSinOcr('La respuesta de Gemini no tuvo un formato JSON válido.');
         }
 
         $estadoCivil = strtoupper(trim((string) ($datosExtraidos['estado_civil'] ?? '')));
@@ -1684,20 +1683,21 @@ class ValidacionDocumentosController extends Controller
             'cedula_conyuge' => '',
         ];
 
+        if ($datosCedula['nombre_completo'] === '' && $datosCedula['cedula'] === '') {
+            return $respuestaSinOcr('Gemini no pudo extraer el nombre ni el número de cédula del documento.');
+        }
+
         $validacion->update([
-            'ruta_cedula_cliente' => $rutaCedula,
             'datos_cedula_cliente' => $datosCedula,
         ]);
 
-        if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula) {
-            Storage::disk('local')->delete($rutaAnterior);
-        }
-
         return response()->json([
             'success' => true,
+            'cedula_guardada' => true,
+            'ocr_fallo' => false,
             'ruta_cedula_cliente' => $rutaCedula,
             'datos_cedula_cliente' => $datosCedula,
-            'cedula_url' => route('validacion-documentos.cedula', $validacion),
+            'cedula_url' => $cedulaUrl,
         ]);
     }
 

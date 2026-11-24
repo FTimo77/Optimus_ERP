@@ -36,17 +36,22 @@ const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         }
 
         let ultimaRespuesta = '';
+        const inicioMs = Date.now();
+        const tiempoMaximoMs = 35000;
 
-        // 2. Intentamos hasta 4 rondas si Google responde "high demand" (503 / 429)
-        for (let intento = 1; intento <= 4; intento++) {
+        // 2. Intentamos hasta 2 rondas si Google responde "high demand" (503 / 429), respetando límite global de 35s
+        for (let intento = 1; intento <= 2; intento++) {
             for (const modelo of modelosCandidatos) {
+                if (Date.now() - inicioMs >= tiempoMaximoMs) {
+                    break;
+                }
                 try {
                     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
                     const response = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: payload,
-                        signal: AbortSignal.timeout(25000)
+                        signal: AbortSignal.timeout(15000)
                     });
 
                     const texto = await response.text();
@@ -64,7 +69,7 @@ const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                         continue;
                     }
 
-                    // Si es "high demand" (503) o límite de velocidad (429), probamos el siguiente o esperamos un par de segundos
+                    // Si es "high demand" (503) o límite de velocidad (429), probamos el siguiente
                     if (response.status === 503 || response.status === 429 || texto.includes('high demand')) {
                         continue;
                     }
@@ -73,12 +78,19 @@ const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                 }
             }
 
-            // Pausa de 2.5 segundos antes del siguiente reintento cuando hay "High Demand"
-            await esperar(2500);
+            if (Date.now() - inicioMs >= tiempoMaximoMs) {
+                break;
+            }
+
+            // Pausa de 1.5 segundos antes del siguiente reintento cuando hay "High Demand"
+            await esperar(1500);
         }
 
-        // Si después de todos los reintentos sigue saturado, devolvemos el último mensaje
-        fs.writeFileSync(archivoSalida, ultimaRespuesta, 'utf8');
+        // Si después de todos los reintentos sigue sin responder, devolvemos un JSON de error claro
+        const salidaFinal = ultimaRespuesta && ultimaRespuesta.trim() !== ''
+            ? ultimaRespuesta
+            : JSON.stringify({ error: { message: 'Tiempo de espera agotado al conectar con Gemini.' } });
+        fs.writeFileSync(archivoSalida, salidaFinal, 'utf8');
 
     } catch (error) {
         fs.writeFileSync(archivoSalida, JSON.stringify({

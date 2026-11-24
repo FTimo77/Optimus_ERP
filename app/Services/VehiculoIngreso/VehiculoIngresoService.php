@@ -13,6 +13,7 @@ use App\Models\pais;
 use App\Models\Servicio;
 use App\Models\Tipo_movimiento;
 use App\Models\tipo_combustible;
+use App\Models\TipoContrato;
 use App\Models\TipoVehiculo;
 use App\Models\transmision;
 use App\Models\ValidacionDocumento;
@@ -706,7 +707,11 @@ class VehiculoIngresoService
                     ?? pais::firstOrCreate(['nombre' => 'POR DEFINIR'])->id_pais;
                 $idCombustible = tipo_combustible::firstOrCreate(['nombre' => 'POR DEFINIR'])->id_tipo_combustible;
                 $idTransmision = transmision::firstOrCreate(['nombre' => 'POR DEFINIR'])->id_transmision;
-                $idEstado = estado_vehiculo::firstOrCreate(['nombre' => 'Disponible'])->id_estado;
+                $idEstado = estado_vehiculo::firstOrCreate(['nombre' => 'En Inventario'])->id_estado;
+                $tipoContratoPropietario = TipoContrato::firstOrCreate(
+                    ['nombre' => 'Propietario Optimus'],
+                    ['requiere_documento' => false, 'cantidad_documentos' => 0],
+                );
 
                 $tipoVehiculo = $validated['tipo_vehiculo'] ?? null;
                 $servicio = $validated['servicio'] ?? null;
@@ -740,6 +745,7 @@ class VehiculoIngresoService
                     'id_servicio' => $idServicio,
                     'id_patio' => $request->user()?->id_patio,
                     'id_estado' => $idEstado,
+                    'id_tipo_contrato' => $tipoContratoPropietario->id_tipo_contrato,
                     'metodo_ingreso' => 'nuevos',
                     'modelo' => mb_strtoupper($validated['modelo'], 'UTF-8'),
                     'anio' => (int) $validated['anio'],
@@ -760,9 +766,10 @@ class VehiculoIngresoService
                 }
 
                 // Inicializa expediente documental base (checklist de documentos del vehículo)
-                Documentos_vehiculo::firstOrCreate([
-                    'id_vehiculo' => $vehiculo->id_vehiculo,
-                ]);
+                Documentos_vehiculo::firstOrCreate(
+                    ['id_vehiculo' => $vehiculo->id_vehiculo],
+                    ['id_tipo_contrato' => $tipoContratoPropietario->id_tipo_contrato],
+                );
 
                 // Registra asiento inicial en Kardex (movimientos_vehiculos)
                 $tipoMovimiento = Tipo_movimiento::firstOrCreate(['nombre' => 'Ingreso a Inventario']);

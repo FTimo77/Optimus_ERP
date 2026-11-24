@@ -55,6 +55,13 @@ const showingNavigationDropdown = ref(false);
                                     Inventario de Vehículos
                                 </NavLink>
                                 <NavLink
+                                    v-if="$page.props.auth.roles?.includes('Vendedor') || $page.props.auth.roles?.includes('Jefe de Patio') || $page.props.auth.roles?.includes('Administrador') || $page.props.auth.roles?.includes('Administracion') || $page.props.auth.permissions?.includes('vender vehiculo')"
+                                    :href="route('mis-ventas.index')"
+                                    :active="route().current('mis-ventas.*')"
+                                >
+                                    Mis Ventas
+                                </NavLink>
+                                <NavLink
                                     :href="route('validacion-documentos.index')"
                                     :active="route().current('validacion-documentos.*')"
                                 >
@@ -185,6 +192,13 @@ const showingNavigationDropdown = ref(false);
                             :active="route().current('vehiculos.index')"
                         >
                             Inventario de Vehículos
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink
+                            v-if="$page.props.auth.roles?.includes('Vendedor') || $page.props.auth.roles?.includes('Jefe de Patio') || $page.props.auth.roles?.includes('Administrador') || $page.props.auth.roles?.includes('Administracion') || $page.props.auth.permissions?.includes('vender vehiculo')"
+                            :href="route('mis-ventas.index')"
+                            :active="route().current('mis-ventas.*')"
+                        >
+                            Mis Ventas
                         </ResponsiveNavLink>
                         <ResponsiveNavLink
                             :href="route('validacion-documentos.index')"

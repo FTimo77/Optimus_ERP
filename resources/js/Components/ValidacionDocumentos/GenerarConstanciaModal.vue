@@ -23,6 +23,8 @@ const emit = defineEmits(['close', 'cedula-actualizada', 'constancia-generada'])
 const archivoCedula = ref(null);
 const escaneandoCedula = ref(false);
 const errorCedula = ref('');
+const avisoCedula = ref('');
+const exitoCedula = ref('');
 const generandoConstancia = ref(false);
 const errorConstancia = ref('');
 
@@ -38,6 +40,8 @@ const datosCedula = reactive({
 const seleccionarCedula = (event) => {
     archivoCedula.value = event.target.files[0] || null;
     errorCedula.value = '';
+    avisoCedula.value = '';
+    exitoCedula.value = '';
 };
 
 const escanearCedulaConGemini = async () => {
@@ -48,6 +52,8 @@ const escanearCedulaConGemini = async () => {
 
     escaneandoCedula.value = true;
     errorCedula.value = '';
+    avisoCedula.value = '';
+    exitoCedula.value = '';
 
     const formData = new FormData();
     formData.append('documento_cedula', archivoCedula.value);
@@ -56,10 +62,23 @@ const escanearCedulaConGemini = async () => {
         const res = await axios.post(
             route('validacion-documentos.escanear.cedula', props.validacion.id),
             formData,
-            { headers: { 'Content-Type': 'multipart/form-data' } },
+            {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                    Accept: 'application/json',
+                },
+                timeout: 65000,
+            },
         );
 
-        if (res.data?.success) {
+        if (res.data?.cedula_url) {
+            emit('cedula-actualizada', res.data.cedula_url);
+        }
+
+        if (res.data?.ocr_fallo) {
+            avisoCedula.value = res.data.warning
+                || 'Gemini no respondió o no pudo analizar la cédula, pero el archivo sí se almacenó correctamente en el sistema. Completa los datos manualmente abajo.';
+        } else if (res.data?.success) {
             const d = res.data.datos_cedula_cliente || {};
             datosCedula.nombre_completo = d.nombre_completo || '';
             datosCedula.cedula = d.cedula || '';
@@ -69,15 +88,27 @@ const escanearCedulaConGemini = async () => {
             if (d.cedula_conyuge !== undefined) {
                 datosCedula.cedula_conyuge = d.cedula_conyuge || '';
             }
-            if (res.data.cedula_url) {
-                emit('cedula-actualizada', res.data.cedula_url);
-            }
+            exitoCedula.value = 'Cédula almacenada y datos extraídos correctamente con Gemini.';
         } else {
             errorCedula.value = res.data?.message || 'No se pudo procesar la cédula con Gemini.';
         }
     } catch (error) {
-        const errores = Object.values(error.response?.data?.errors || {}).flat();
-        errorCedula.value = errores[0] || error.response?.data?.message || 'Error al escanear la cédula.';
+        const data = typeof error.response?.data === 'object' && error.response?.data !== null
+            ? error.response.data
+            : null;
+
+        if (data?.cedula_url) {
+            emit('cedula-actualizada', data.cedula_url);
+            avisoCedula.value = data.warning
+                || 'Gemini no pudo analizar la cédula, pero el archivo sí se almacenó correctamente en el sistema. Completa los datos manualmente.';
+        } else if (error.code === 'ECONNABORTED') {
+            errorCedula.value = 'Se agotó el tiempo de espera con Gemini. Si el archivo ya aparece arriba en «Ver cédula guardada», puedes llenar los datos manualmente.';
+        } else {
+            const errores = Object.values(data?.errors || {}).flat();
+            errorCedula.value = errores[0]
+                || data?.message
+                || `Error de conexión con el servidor (${error.response?.status || 'sin respuesta'}) al escanear la cédula con Gemini.`;
+        }
     } finally {
         escaneandoCedula.value = false;
     }
@@ -186,9 +217,31 @@ const generarYDescargarConstancia = async () => {
                     >
                         <div class="h-full w-1/3 animate-pulse rounded-full bg-yellow-500" />
                     </div>
-                    <p v-if="errorCedula" role="alert" class="mt-2 text-xs font-medium text-red-600">
-                        {{ errorCedula }}
-                    </p>
+                    <div
+                        v-if="exitoCedula"
+                        role="status"
+                        class="mt-2 rounded-md border border-emerald-300 bg-emerald-50 p-2.5 text-xs font-medium text-emerald-900"
+                    >
+                        ✅ {{ exitoCedula }}
+                    </div>
+                    <div
+                        v-if="avisoCedula"
+                        role="alert"
+                        class="mt-2 rounded-md border-2 border-amber-400 bg-amber-50 p-3 text-xs text-amber-950"
+                    >
+                        <p class="font-bold text-amber-900">
+                            ⚠️ Gemini no pudo analizar la cédula (archivo guardado correctamente)
+                        </p>
+                        <p class="mt-1">{{ avisoCedula }}</p>
+                    </div>
+                    <div
+                        v-if="errorCedula"
+                        role="alert"
+                        class="mt-2 rounded-md border-2 border-red-300 bg-red-50 p-3 text-xs text-red-900"
+                    >
+                        <p class="font-bold text-red-800">❌ Error al escanear la cédula</p>
+                        <p class="mt-1">{{ errorCedula }}</p>
+                    </div>
                 </div>
 
                 <!-- Paso 2: Datos editables del vendedor -->
