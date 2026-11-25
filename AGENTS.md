@@ -133,3 +133,14 @@ Existen tres caminos en `VehiculoIngresoController::store`:
   - Usar `Http::preventStrayRequests()` y `Http::fake([...])` al probar integraciones con Gemini.
   - Verificar respuestas de Inertia mediante `assertInertia(fn (Assert $page) => $page->component(...)->where(...))`.
 - **Ejecución**: Ejecutar pruebas específicas con `php artisan test --filter=NombreDelTest`.
+
+---
+
+## 6. Documentación Obligatoria de Cambios Realizados por Agentes
+
+Todo agente que implemente cambios estructurales, de base de datos, nuevos módulos, rutas, flujos de negocio o integraciones **debe documentar el cambio en `documentacion.md`** (ver regla completa en `.agents/rules/documentacion-cambios-agentes.md`), registrando:
+- Fecha (`YYYY-MM-DD`), módulo y resumen funcional del cambio.
+- Migraciones, tablas, llaves primarias/foráneas y seeders afectados.
+- Archivos creados o modificados (backend y frontend), rutas y permisos Spatie.
+- Confirmación de almacenamiento privado (`local`) si se manipulan documentos confidenciales y comandos locales pendientes (`php artisan migrate`, `npm run build`, etc.).
+- No registrar secretos ni valores reales de `.env`; omitir para preguntas sin edición de código o retoques mínimos de texto/CSS.

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Venta extends Model
 {
@@ -104,5 +105,11 @@ class Venta extends Model
     public function pagos(): HasMany
     {
         return $this->hasMany(PagoVenta::class, 'id_venta', 'id_venta');
+    }
+
+    public function credito(): HasOne
+    {
+        return $this->hasOne(Credito::class, 'id_venta', 'id_venta')
+            ->latestOfMany('id_credito');
     }
 }

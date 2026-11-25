@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class Transacciones_caja extends Model
 {
+    protected $table = 'transacciones_cajas';
+
     protected $primaryKey = 'id_transaccion';
     protected $fillable = [
         'id_vehiculo',
@@ -38,5 +40,10 @@ class Transacciones_caja extends Model
     function metodo_pago()
     {
         return $this->belongsTo(Metodo_pago::class, 'id_metodo_pago', 'id_metodo_pago');
+    }
+
+    function cliente()
+    {
+        return $this->belongsTo(Cliente::class, 'id_cliente', 'id_cliente');
     }
 }

@@ -129,7 +129,20 @@ class Vehiculo extends Model
 
     public function credito(): HasOne
     {
-        return $this->hasOne(Credito::class, 'id_vehiculo', 'id_vehiculo');
+        return $this->hasOne(Credito::class, 'id_vehiculo', 'id_vehiculo')
+            ->whereNull('id_venta');
+    }
+
+    public function creditoVenta(): HasOne
+    {
+        return $this->hasOne(Credito::class, 'id_vehiculo', 'id_vehiculo')
+            ->whereNotNull('id_venta')
+            ->latestOfMany('id_credito');
+    }
+
+    public function creditos(): HasMany
+    {
+        return $this->hasMany(Credito::class, 'id_vehiculo', 'id_vehiculo');
     }
 
     public function pagos(): HasMany

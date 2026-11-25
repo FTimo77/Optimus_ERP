@@ -134,6 +134,7 @@ class MultasPagosVehiculoService
                 if ($costoAdquisicion > 0 && ($pagadoActual + $montoNuevo) >= ($costoAdquisicion - 0.01)) {
                     Credito::query()
                         ->where('id_vehiculo', $vehiculo->id_vehiculo)
+                        ->whereNull('id_venta')
                         ->where('estado', 'pendiente')
                         ->update(['estado' => 'pagado']);
                 }

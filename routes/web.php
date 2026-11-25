@@ -120,6 +120,12 @@ Route::middleware(['auth'])->group(function () {
         ->name('mis-ventas.descuento.decidir');
     Route::patch('/mis-ventas/{venta}/decidir-credito', [MisVentasController::class, 'decidirCredito'])
         ->name('mis-ventas.credito.decidir');
+    Route::post('/mis-ventas/{venta}/credito/pagos', [MisVentasController::class, 'registrarPagoCredito'])
+        ->name('mis-ventas.credito.pagos.store');
+    Route::get('/mis-ventas/{venta}/credito/pagare', [MisVentasController::class, 'descargarPagareCredito'])
+        ->name('mis-ventas.credito.pagare');
+    Route::get('/mis-ventas/{venta}/credito/pagos/{pagoCredito}/comprobante', [MisVentasController::class, 'descargarComprobantePagoCredito'])
+        ->name('mis-ventas.credito.pagos.comprobante');
     Route::post('/mis-ventas/{venta}/forma-pago', [MisVentasController::class, 'registrarFormaPago'])
         ->name('mis-ventas.pago.store');
     Route::post('/mis-ventas/{venta}/pagos/abono', [MisVentasController::class, 'registrarAbonoCuota'])

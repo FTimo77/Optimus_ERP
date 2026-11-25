@@ -1,0 +1,255 @@
+# Documentación Técnica — Módulo de Créditos, Amortización y Cobranzas (Optimus ERP)
+
+Esta guía documenta la arquitectura normalizada de base de datos, modelos Eloquent, flujo operativo desde `/mis-ventas/{id}`, integración contable con Caja y reglas de seguridad para el almacenamiento privado de documentos del módulo de **Créditos, Amortización y Cobranzas**.
+
+---
+
+## 1. Diagrama Entidad-Relación (Esquema Normalizado)
+
+```mermaid
+erDiagram
+    clientes ||--o{ ventas : "compra"
+    clientes ||--o{ creditos : "deudor"
+    clientes ||--o{ transacciones_cajas : "titular"
+    vehiculos ||--o{ ventas : "objeto_venta"
+    vehiculos ||--o{ creditos : "vehiculo_financiado"
+    vehiculos ||--o{ transacciones_cajas : "vehiculo"
+    ventas ||--o| creditos : "origina_credito"
+    tasas_interes ||--o{ creditos : "plan_financiero"
+    users ||--o{ creditos : "registra_o_aprueba"
+    creditos ||--|{ cuotas_credito : "tabla_amortizacion"
+    creditos ||--o{ pagos_credito : "abonos"
+    cuotas_credito ||--o{ pagos_credito : "liquida"
+    transacciones_cajas ||--o| pagos_credito : "asiento_contable"
+    users ||--o{ pagos_credito : "cobra"
+```
+
+---
+
+## 2. Estructura de Base de Datos
+
+**Migración principal:** `database/migrations/2026_11_25_114500_create_creditos_amortizacion_cobranzas_schema.php`  
+**Seeder de catálogo:** `database/seeders/TasaInteresSeeder.php` (registrado en `DatabaseSeeder.php`)
+
+### 2.1 Llaves primarias reales de tablas existentes vinculadas
+| Tabla existente | Llave primaria real | Tipo |
+| :--- | :--- | :--- |
+| `clientes` | `id_cliente` | `unsignedBigInteger` |
+| `ventas` | `id_venta` | `unsignedBigInteger` |
+| `vehiculos` | `id_vehiculo` | `varchar(20)` (placa normalizada) |
+| `transacciones_cajas` | `id_transaccion` | `unsignedBigInteger` |
+| `users` | `id` | `unsignedBigInteger` |
+
+> **Ajustes de compatibilidad aplicados en la migración:**
+> - `clientes`: `cedula` ampliada a `varchar(30)` (evita desbordamiento de `INT` en cédulas ecuatorianas de 10 dígitos), y `apellido`, `telefono`, `correo`, `direccion` configurados como `nullable`.
+> - `transacciones_cajas`: `id_cliente` convertido a `nullable` y `monto` ampliado a `decimal(15, 2)` para soportar asientos de cobro inmediatos antes de emitir la constancia del comprador.
+
+---
+
+### 2.2 Tabla `tasas_interes` (Catálogo financiero)
+Almacena los planes y tasas configurables del concesionario, diferenciando explícitamente la **Tasa Nominal Anual (TNA)** y la **Tasa Efectiva Anual (TEA)** conforme a la normativa financiera ecuatoriana (BCE).
+
+| Columna | Tipo | Restricciones / Descripción |
+| :--- | :--- | :--- |
+| `id_tasa_interes` | `BIGINT UNSIGNED` | PK autoincremental |
+| `nombre` | `VARCHAR(120)` | Nombre comercial del plan |
+| `descripcion` | `VARCHAR(255)` | Nullable. Detalle del plan |
+| `tasa_anual` | `DECIMAL(6,2)` | Tasa anual de compatibilidad (equivalente a `tasa_nominal_anual`) |
+| `tasa_nominal_anual` | `DECIMAL(6,2)` | **TNA**: `tasa_mensual × 12` sin capitalización (default `0.00`) |
+| `tasa_efectiva_anual` | `DECIMAL(6,2)` | **TEA**: `((1 + tasa_mensual/100)^12 - 1) × 100` con capitalización mensual (default `0.00`) |
+| `tasa_mensual` | `DECIMAL(6,4)` | Porcentaje mensual (default `0.0000`) |
+| `tasa_mora` | `DECIMAL(6,2)` | Porcentaje de mora (default `0.00`) |
+| `plazo_minimo_meses` | `SMALLINT UNSIGNED` | Plazo mínimo permitido en meses |
+| `plazo_maximo_meses` | `SMALLINT UNSIGNED` | Plazo máximo permitido en meses |
+| `activo` | `BOOLEAN` | Estado activo/inactivo (default `true`) |
+| `created_at` / `updated_at` | `TIMESTAMP` | Marcas de tiempo |
+
+**Planes precargados (`TasaInteresSeeder`):**
+- **Crédito Directo Corto Plazo (0% Interés):** `0.00%` mensual · TNA `0.00%` · TEA `0.00%` · Mora `3.00%` (1–6 meses).
+- **Financiamiento Preferencial (> 6 meses):** `1.00%` mensual · TNA `12.00%` · TEA `12.68%` · Mora `4.00%` (7–36 meses).
+- **Financiamiento Optimus Estándar (> 6 meses):** `1.30%` mensual · TNA `15.60%` · TEA `16.77%` · Mora `5.00%` (7–48 meses).
+
+---
+
+### 2.3 Tabla `creditos` (Cabecera del financiamiento)
+Extiende la tabla `creditos` preservando compatibilidad total con los créditos de adquisición (`validacion_documento_id != null`, `id_venta = null`).
+
+| Columna | Tipo | Restricciones / Descripción |
+| :--- | :--- | :--- |
+| `id_credito` | `BIGINT UNSIGNED` | PK autoincremental |
+| `validacion_documento_id` | `BIGINT UNSIGNED` | Nullable, FK → `validacion_documentos.id` (`nullOnDelete`) |
+| `id_cliente` | `BIGINT UNSIGNED` | Nullable, FK → `clientes.id_cliente` (`nullOnDelete`) |
+| `id_venta` | `BIGINT UNSIGNED` | Nullable, FK → `ventas.id_venta` (`cascadeOnDelete`) |
+| `id_vehiculo` | `VARCHAR(20)` | Nullable, FK → `vehiculos.id_vehiculo` (`nullOnDelete`) |
+| `id_tasa_interes` | `BIGINT UNSIGNED` | Nullable, FK → `tasas_interes.id_tasa_interes` (`nullOnDelete`) |
+| `user_id` | `BIGINT UNSIGNED` | Nullable, FK → `users.id` (`nullOnDelete`, quien registra/aprueba) |
+| `monto_total` | `DECIMAL(15,2)` | Precio final de venta acordado |
+| `monto_inicial` | `DECIMAL(15,2)` | Entrada / monto inicial (default `0.00`) |
+| `monto_financiado` | `DECIMAL(15,2)` | `monto_total - monto_inicial` |
+| `saldo_pendiente` | `DECIMAL(15,2)` | Saldo exigible restante de las cuotas |
+| `numero_cuotas` | `SMALLINT UNSIGNED` | Total de cuotas pactadas |
+| `fecha_inicio` | `DATE` | Fecha de apertura del crédito |
+| `fecha_vencimiento` | `DATE` | Nullable (compatibilidad con créditos de compra) |
+| `fecha_vencimiento_final` | `DATE` | Fecha de vencimiento de la última cuota |
+| `ruta_pagare` | `VARCHAR(255)` | Nullable. Ruta en disco **privado** `local` al pagaré `.docx` |
+| `estado` | `VARCHAR(40)` | `pendiente_aprobacion_credito`, `activo`, `en_mora`, `cancelado` |
+| `observaciones` | `TEXT` | Nullable |
+| `registrado_por` | `BIGINT UNSIGNED` | Nullable, FK → `users.id` (`nullOnDelete`) |
+
+---
+
+### 2.4 Tabla `cuotas_credito` (Tabla de amortización detallada)
+| Columna | Tipo | Restricciones / Descripción |
+| :--- | :--- | :--- |
+| `id_cuota_credito` | `BIGINT UNSIGNED` | PK autoincremental |
+| `id_credito` | `BIGINT UNSIGNED` | FK → `creditos.id_credito` (`onDelete('cascade')`) |
+| `numero_cuota` | `SMALLINT UNSIGNED` | Número secuencial (`UNIQUE(id_credito, numero_cuota)`) |
+| `fecha_vencimiento` | `DATE` | Fecha programada de pago |
+| `monto_capital` | `DECIMAL(15,2)` | Porción de capital de la cuota |
+| `monto_interes` | `DECIMAL(15,2)` | Porción de interés financiero |
+| `monto_mora` | `DECIMAL(15,2)` | Recargo por mora (default `0.00`) |
+| `valor_cuota` | `DECIMAL(15,2)` | Valor pactado de la cuota (`capital + interés`) |
+| `monto_pagado` | `DECIMAL(15,2)` | Acumulado pagado de esta cuota |
+| `fecha_pago_real` | `DATE` | Nullable. Fecha real del último pago aplicado |
+| `estado` | `VARCHAR(30)` | `pendiente`, `parcial`, `pagada`, `vencida` |
+
+---
+
+### 2.5 Tabla `pagos_credito` (Cobranzas, comprobantes privados y vínculo con Caja)
+| Columna | Tipo | Restricciones / Descripción |
+| :--- | :--- | :--- |
+| `id_pago_credito` | `BIGINT UNSIGNED` | PK autoincremental |
+| `id_credito` | `BIGINT UNSIGNED` | FK → `creditos.id_credito` (`cascadeOnDelete`) |
+| `id_cuota_credito` | `BIGINT UNSIGNED` | Nullable, FK → `cuotas_credito.id_cuota_credito` (`nullOnDelete`) |
+| `id_transaccion_caja` | `BIGINT UNSIGNED` | Nullable, FK → `transacciones_cajas.id_transaccion` (`nullOnDelete`) |
+| `user_id` | `BIGINT UNSIGNED` | Nullable, FK → `users.id` (`nullOnDelete`) |
+| `monto_pagado` | `DECIMAL(15,2)` | Valor abonado |
+| `metodo_pago` | `VARCHAR(30)` | `efectivo`, `transferencia`, `cheque`, `deposito` |
+| `numero_referencia` | `VARCHAR(100)` | Nullable. Número de transferencia/cheque/depósito |
+| `fecha_pago` | `DATE` | Fecha del abono |
+| `ruta_comprobante` | `VARCHAR(255)` | Nullable. Ruta en disco **privado** `local` |
+| `observaciones` | `TEXT` | Nullable |
+
+---
+
+## 3. Modelos Eloquent y Aislamiento con Inventario
+
+| Modelo | Archivo | Relaciones principales |
+| :--- | :--- | :--- |
+| `TasaInteres` | `app/Models/TasaInteres.php` | `creditos()` |
+| `Credito` | `app/Models/Credito.php` | `cliente()`, `venta()`, `vehiculo()`, `tasaInteres()`, `usuario()`, `registrador()`, `cuotas()`, `pagos()` |
+| `CuotaCredito` | `app/Models/CuotaCredito.php` | `credito()`, `pagos()` |
+| `PagoCredito` | `app/Models/PagoCredito.php` | `credito()`, `cuota()`, `transaccionCaja()`, `usuario()` |
+| `Venta` | `app/Models/venta.php` | `credito()` (`hasOne` último crédito de la venta) |
+| `Vehiculo` | `app/Models/vehiculo.php` | `credito()` (filtrado `whereNull('id_venta')` para compras), `creditoVenta()` (`whereNotNull('id_venta')`), `creditos()` |
+| `Transacciones_caja` | `app/Models/transacciones_caja.php` | `vehiculo()`, `tipo_transaccion()`, `user()`, `metodo_pago()`, `cliente()` |
+
+> **Aislamiento con Inventario:** `Vehiculo::credito()` y `MultasPagosVehiculoService` filtran explícitamente `whereNull('id_venta')`, evitando que un crédito comercial otorgado a un cliente se confunda con un crédito de adquisición del concesionario.
+
+---
+
+## 4. Flujo Funcional Integrado desde `/mis-ventas/{id}`
+
+**Controlador:** `app/Http/Controllers/MisVentasController.php`  
+**Vista principal:** `resources/js/Pages/MisVentas/Show.vue`
+
+1. **Configuración del Crédito (`registrarFormaPago`)**
+   - El vendedor define la **Entrada / Monto inicial** (con método y comprobante privado opcional), el **Plan / Tasa de interés** (`tasas_interes`) y la modalidad:
+     - **Crédito abierto / personalizado:** agrega cuotas manuales (`+ Añadir cuota`) con monto y vencimiento hasta cubrir exactamente el `monto_financiado`.
+     - **Crédito > 6 meses:** define una cuota mensual fija, un plazo mayor a 6 meses (`>= 7`) y la fecha del siguiente pago (`>= hoy`), proyectando mes a mes sin dividir automáticamente el total.
+   - Dentro de `DB::transaction()` con `lockForUpdate()`, se crea la cabecera en `creditos` en estado **`pendiente_aprobacion_credito`**, se generan todas las filas en `cuotas_credito` con desglose de `monto_capital` y `monto_interes`, y se emite el **Pagaré y Tabla de Amortización (`.docx`)** en `Storage::disk('local')`.
+   - Si existe entrada con comprobante, se registra también el ingreso en `pagos_ventas` y `transacciones_cajas`.
+
+2. **Aprobación Obligatoria (`decidirCredito`)**
+   - Ambas modalidades de crédito requieren autorización de un usuario con rol **Administrativo / Administración / Administrador** (Spatie Permissions).
+   - **Al aprobar:** `creditos.estado` pasa a `'activo'`, el vehículo pasa a `Vendido` o `Reservado`, se regenera el pagaré privado con el estado aprobado y se habilita la emisión de la constancia y el registro de cobranzas.
+   - **Al rechazar:** `creditos.estado` pasa a `'cancelado'` y se vuelve a habilitar el formulario de pago para que el vendedor configure una nueva opción.
+
+3. **Sincronización de Cliente (`sincronizarClienteComprador`)**
+   - Al generar la constancia con los datos de cédula del comprador, se crea o actualiza el registro en `clientes`, se enlaza `id_cliente` en `ventas` y `creditos`, y se actualiza el pagaré `.docx` con los datos reales del deudor.
+
+4. **Cobranzas y Asiento Automático en Caja (`registrarPagoCredito`)**
+   - Disponible cuando el crédito está en estado `activo` o `en_mora`.
+   - Sube el comprobante obligatoriamente al disco privado `local`.
+   - Dentro de `DB::transaction()` con `lockForUpdate()`:
+     1. Crea el asiento contable en `transacciones_cajas` bajo el tipo **«Cobro de Cuota de Crédito»**.
+     2. Registra el abono en `pagos_credito` vinculado a `id_transaccion_caja` y `id_cuota_credito`.
+     3. Aplica el pago a la cuota seleccionada (y en cascada a las siguientes si hay excedente), actualizando `monto_pagado`, `fecha_pago_real` y `estado` (`parcial` / `pagada`).
+     4. Recalcula `creditos.saldo_pendiente` y actualiza `creditos.estado` (`cancelado` si llega a `$0.00`, `en_mora` si existen cuotas vencidas sin saldar, o `activo`).
+
+---
+
+## 5. Seguridad, Almacenamiento Privado y Rutas Protegidas
+
+Cumpliendo la regla global de seguridad del proyecto, **ningún pagaré ni comprobante se almacena en el disco `public`**:
+
+- **Pagarés:** `storage/app/private/documentos/pagares/pagare_credito_{placa}_{id_credito}_{timestamp}.docx`
+- **Comprobantes de cobranza:** `storage/app/private/ventas/{id_venta}/creditos/{id_credito}/pagos/...`
+- Todas las transacciones limpian los archivos recién subidos en caso de `Throwable`.
+- Todas las descargas pasan por rutas bajo `middleware(['auth'])` con verificación de acceso (`puedeAccederVenta`) y cabecera `'X-Content-Type-Options' => 'nosniff'`:
+
+| Método | URI | Nombre de ruta | Acción |
+| :--- | :--- | :--- | :--- |
+| `PATCH` | `/mis-ventas/{venta}/decidir-credito` | `mis-ventas.credito.decidir` | Aprobar o rechazar solicitud de crédito |
+| `POST` | `/mis-ventas/{venta}/credito/pagos` | `mis-ventas.credito.pagos.store` | Registrar cobro de cuota + asiento en Caja |
+| `GET` | `/mis-ventas/{venta}/credito/pagare` | `mis-ventas.credito.pagare` | Descargar/ver pagaré y tabla de amortización privado |
+| `GET` | `/mis-ventas/{venta}/credito/pagos/{pagoCredito}/comprobante` | `mis-ventas.credito.pagos.comprobante` | Descargar/ver comprobante privado de cobro |
+
+---
+
+## 6. Comandos de Despliegue Local (Laragon)
+
+```bash
+php artisan migrate
+php artisan db:seed --class=TasaInteresSeeder
+npm run build
+```
+
+---
+
+## 7. Registro de Cambios Realizados por Agentes
+
+### 2026-11-25 — Tasa de interés fija escalonada (1.70% mensual meses 1–12 y 1.50% desde mes 13)
+- **Resumen funcional:** Se fijó la tasa de interés oficial del concesionario en **1.70% mensual** sobre el monto financiado durante los primeros 12 meses (ej. sobre \$10,000 → \$170/mes; a 10 meses = \$1,700 de interés) y con reducción automática al **1.50% mensual** a partir del mes 13 (\$150/mes sobre \$10,000) cuando el plazo supera los 12 meses.
+- **Base de datos:**
+  - Migración: `database/migrations/2026_11_25_165000_set_fixed_tiered_interest_rate_in_tasas_interes.php` (agrega `tasa_mensual_desde_mes_13` a `tasas_interes` y activa el plan oficial `1.70% / 1.50%`, TNA `20.40%`, TEA `22.42%`).
+  - Seeder actualizado: `database/seeders/TasaInteresSeeder.php`.
+- **Archivos modificados:**
+  - `app/Models/TasaInteres.php`
+  - `app/Http/Controllers/MisVentasController.php`
+  - `app/Services/PagareGeneratorService.php`
+  - `resources/js/Pages/MisVentas/Show.vue`
+- **Comandos requeridos en local:** `php artisan migrate`, `php artisan db:seed --class=TasaInteresSeeder`, `npm run build`.
+
+### 2026-11-25 — Sincronización automática Cédula (Gemini) → `clientes` → `creditos` → Pagaré `.docx`
+- **Resumen funcional:** Al escanear la cédula del comprador con Gemini en `MisVentas/Show.vue`, el prompt ahora extrae también la `direccion` (reverso de la cédula ecuatoriana), conserva el archivo en disco privado `local` ante fallos de IA, sincroniza inmediatamente `clientes` (`updateOrCreate` por cédula con `nombre`, `apellido`, `direccion`, `correo`, `telefono`), enlaza `id_cliente` en `ventas` y `creditos`, y regenera automáticamente el pagaré `.docx` (eliminando el anterior) para que nunca aparezca «Pendiente de registro» una vez escaneada la cédula.
+- **Archivos modificados:**
+  - `app/Http/Controllers/MisVentasController.php` (`escanearCedula`, `generarConstancia`, `persistirCreditoYTablaAmortizacion`, `sincronizarClienteComprador`)
+  - `app/Services/PagareGeneratorService.php` (prioridad de datos `cliente` → `datos_cedula_comprador` → fallback, y correo beneficiario)
+  - `config/app.php`
+  - `resources/js/Pages/MisVentas/Show.vue` (campos editables de correo COGEP y dirección domiciliaria + aviso de sincronización de pagaré)
+- **Seguridad:** Cédulas y pagarés se guardan exclusivamente en disco privado `local` y se sirven bajo `middleware(['auth'])`.
+
+### 2026-11-25 — Generador automático de Pagaré a la Orden y Tabla de Amortización (`PagareGeneratorService`)
+- **Resumen funcional:** Se implementó el servicio dedicado `PagareGeneratorService` utilizando `PhpOffice\PhpWord\TemplateProcessor` sobre la plantilla oficial `storage/app/plantillas/Optimus_Pagare_Base_Casabaca 2.docx`. El servicio desfragmenta etiquetas XML partidas por Word en cuerpo y pie de página (`word/document.xml`, `word/footer1.xml`), reemplaza variables legales/financieras y corchetes (`[CORREO]`, `[VALOR NUMÉRICO]`), clona dinámicamente la tabla de amortización de 8 columnas (`cloneRow`) con cálculo exacto de días, capital inicial/final y fila de totales, y regenera automáticamente el pagaré al crear, aprobar o sincronizar los datos del cliente eliminando el archivo previo.
+- **Base de datos:** Sin nuevas migraciones; consume las tablas normalizadas `creditos`, `cuotas_credito`, `tasas_interes`, `clientes`, `ventas` y `vehiculos`.
+- **Archivos creados o modificados:**
+  - `app/Services/PagareGeneratorService.php` (nuevo)
+  - `app/Http/Controllers/MisVentasController.php`
+  - `config/app.php` (`correo_beneficiario_pagare`)
+  - `.env.example` (`CORREO_BENEFICIARIO_PAGARE`)
+- **Rutas, permisos y seguridad:** Los pagarés generados se almacenan exclusivamente en el disco privado `local` (`storage/app/private/documentos/pagares/pagare_credito_{placa}_{id_credito}_{timestamp}.docx`) y se descargan únicamente mediante la ruta protegida `GET /mis-ventas/{venta}/credito/pagare` (`mis-ventas.credito.pagare`) bajo `middleware(['auth'])`.
+- **Comandos requeridos en local:** Definir opcionalmente `CORREO_BENEFICIARIO_PAGARE` en `.env` y ejecutar `php artisan config:clear`.
+
+### 2026-11-25 — Tasa Nominal Anual (TNA) y Tasa Efectiva Anual (TEA) en `tasas_interes`
+- **Resumen funcional:** Se agregaron explícitamente `tasa_nominal_anual` (TNA) y `tasa_efectiva_anual` (TEA) al catálogo financiero `tasas_interes`, mostrando ambas tasas en el selector de planes de `/mis-ventas/{id}` y en el pagaré Word privado (`.docx`).
+- **Base de datos:**
+  - Migración: `database/migrations/2026_11_25_123500_add_tasa_nominal_and_efectiva_to_tasas_interes_table.php` (agrega `tasa_nominal_anual` y `tasa_efectiva_anual` a `tasas_interes` y calcula/actualiza los registros existentes).
+  - Seeder actualizado: `database/seeders/TasaInteresSeeder.php`.
+- **Archivos modificados:**
+  - `app/Models/TasaInteres.php`
+  - `app/Http/Controllers/MisVentasController.php`
+  - `resources/js/Pages/MisVentas/Show.vue`
+  - `documentacion.md`
+- **Rutas, permisos y seguridad:** Sin cambios de rutas; el pagaré `.docx` actualizado sigue almacenándose exclusivamente en el disco privado `local` y sirviéndose bajo `auth`.
+- **Comandos requeridos en local:** `php artisan migrate`, `php artisan db:seed --class=TasaInteresSeeder`, `npm run build`.

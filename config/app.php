@@ -54,6 +54,8 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
+    'correo_beneficiario_pagare' => env('CORREO_BENEFICIARIO_PAGARE', env('MAIL_FROM_ADDRESS', 'gerencia@optimusautos.ec')),
+
     /*
     |--------------------------------------------------------------------------
     | Application Timezone
