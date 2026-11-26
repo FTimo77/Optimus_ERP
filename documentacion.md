@@ -209,6 +209,14 @@ npm run build
 
 ## 7. Registro de Cambios Realizados por Agentes
 
+### 2026-11-26 — Contenedorización para despliegue (`Dockerfile` y `.dockerignore`)
+- **Resumen funcional:** Se creó un `Dockerfile` unificado basado en `php:8.3-apache` para que el servidor de despliegue instale en una sola imagen PHP 8.3 (con extensiones `pdo_mysql`, `zip`, `gd`, `intl`, `mbstring`, `xml`, `exif`, `pcntl`, `bcmath`, `opcache`), Composer 2, Node.js 22 LTS, Chromium del sistema con sus librerías gráficas (`PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true`, `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`), compile el frontend con Vite (`npm run build`) y soporte puerto dinámico `${PORT:-80}` en Apache. Se acompañó con `.dockerignore` excluyendo `.env`, `vendor/`, `node_modules/` y logs sin excluir `storage/app/plantillas/`.
+- **Archivos creados o modificados:**
+  - `Dockerfile` (nuevo)
+  - `.dockerignore` (nuevo)
+  - `documentacion.md`
+- **Comandos requeridos en despliegue:** Configurar variables de entorno en el servidor (`APP_KEY`, `APP_URL`, `DB_*`, `FILESYSTEM_DISK=r2`, `R2_*`, `GEMINI_API_KEY`) y ejecutar `php artisan migrate --force` según corresponda.
+
 ### 2026-11-26 — Migración de almacenamiento permanente de documentos y fotos a disco configurable (`config('filesystems.default')` / Cloudflare `r2`)
 - **Resumen funcional:** Se reemplazaron todas las referencias fijas a los discos `'local'` y `'public'` para documentos permanentes (matrículas, CUV, cédulas, contratos, constancias, pagarés, comprobantes de pago/abonos/multas) y fotografías comerciales de vehículos por `config('filesystems.default')` (configurado a `'r2'` vía `FILESYSTEM_DISK=r2` en `.env`). Los archivos temporales de 1 segundo usados por los scripts Node (`auditoria_completa.cjs`, `consultar_axis.cjs`, `escanear_gemini.cjs`) y la compilación temporal de plantillas Word (`PhpWord`) permanecen en `storage_path('app/...')` local y se eliminan inmediatamente en `finally`. Para el driver `s3`/`r2`, la generación de Word sube el `.docx` mediante `Storage::disk(...)->put()` (evitando `->path()` local) y las fotos comerciales se entregan mediante `temporaryUrl()` firmada (2 horas) sin requerir bucket público.
 - **Archivos modificados:**
