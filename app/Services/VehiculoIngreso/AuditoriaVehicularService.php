@@ -120,7 +120,7 @@ class AuditoriaVehicularService
         $resumenSupa = $this->procesarSupa($paquete, (string) $cedulaDoc);
         $resumenSatje = $this->procesarSatje($paquete, (string) $cedulaDoc);
 
-        $rutaDocumento = $archivo->store('validacion-documentos', 'local');
+        $rutaDocumento = $archivo->store('validacion-documentos', config('filesystems.default'));
         if (! is_string($rutaDocumento)) {
             Log::error('Uploaded vehicle document could not be stored for human review.', [
                 'plate' => $placa,
@@ -168,7 +168,7 @@ class AuditoriaVehicularService
                 ]);
 
                 if ($rutaAnterior !== null && $rutaAnterior !== $rutaDocumento) {
-                    Storage::disk('local')->delete($rutaAnterior);
+                    Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
                 }
 
                 $validacion = $validacionExistente->fresh();
@@ -188,7 +188,7 @@ class AuditoriaVehicularService
                 ]);
             }
         } catch (Throwable $exception) {
-            if (! Storage::disk('local')->delete($rutaDocumento)) {
+            if (! Storage::disk(config('filesystems.default'))->delete($rutaDocumento)) {
                 Log::warning('Registration document could not be removed after draft creation failed.', [
                     'plate' => $placa,
                     'file_path' => $rutaDocumento,

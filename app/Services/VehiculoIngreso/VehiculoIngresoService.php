@@ -171,10 +171,10 @@ class VehiculoIngresoService
         $imagePaths = [];
 
         foreach ($images as $image) {
-            $imagePath = $image->store('vehiculos', 'public');
+            $imagePath = $image->store('vehiculos', config('filesystems.default'));
 
             if (! is_string($imagePath)) {
-                Storage::disk('public')->delete($imagePaths);
+                Storage::disk(config('filesystems.default'))->delete($imagePaths);
 
                 throw new RuntimeException('No se pudo guardar la imagen del vehículo.');
             }
@@ -269,7 +269,7 @@ class VehiculoIngresoService
                 ]);
             });
         } catch (Throwable $exception) {
-            Storage::disk('public')->delete($imagePaths);
+            Storage::disk(config('filesystems.default'))->delete($imagePaths);
 
             throw $exception;
         }
@@ -342,7 +342,7 @@ class VehiculoIngresoService
             }
         }
 
-        if (! Storage::disk('local')->exists($validacion->ruta_documento)) {
+        if (! Storage::disk(config('filesystems.default'))->exists($validacion->ruta_documento)) {
             throw ValidationException::withMessages([
                 'validacion_id' => 'No se encontró el archivo privado de la matrícula auditada. Vuelve a subirlo.',
             ]);
@@ -413,7 +413,7 @@ class VehiculoIngresoService
 
         try {
             foreach ($imagenes as $imagen) {
-                $rutaImagen = $imagen->store("validacion-documentos/{$validacion->id}/imagenes", 'local');
+                $rutaImagen = $imagen->store("validacion-documentos/{$validacion->id}/imagenes", config('filesystems.default'));
 
                 if (! is_string($rutaImagen)) {
                     throw new RuntimeException('No se pudo guardar una imagen del vehículo para revisión.');
@@ -446,7 +446,7 @@ class VehiculoIngresoService
             });
         } catch (Throwable $exception) {
             if ($rutasImagenesTemporales !== []
-                && ! Storage::disk('local')->delete($rutasImagenesTemporales)) {
+                && ! Storage::disk(config('filesystems.default'))->delete($rutasImagenesTemporales)) {
                 Log::warning('Could not remove temporary vehicle images after audited submission failed.', [
                     'validacion_id' => $validacion->id,
                     'file_paths' => $rutasImagenesTemporales,
@@ -483,7 +483,7 @@ class VehiculoIngresoService
             ]);
         }
 
-        $rutaDocumento = $documentoMatricula->store('validacion-documentos', 'local');
+        $rutaDocumento = $documentoMatricula->store('validacion-documentos', config('filesystems.default'));
         if (! is_string($rutaDocumento)) {
             throw ValidationException::withMessages([
                 'documento_matricula' => 'No se pudo guardar la matrícula para revisión manual. Inténtalo nuevamente.',
@@ -498,7 +498,7 @@ class VehiculoIngresoService
             $rutasImagenesTemporales = [];
 
             foreach ($imagenes as $imagen) {
-                $rutaImagen = $imagen->store("validacion-documentos/manual/{$placa}/imagenes", 'local');
+                $rutaImagen = $imagen->store("validacion-documentos/manual/{$placa}/imagenes", config('filesystems.default'));
 
                 if (! is_string($rutaImagen)) {
                     throw ValidationException::withMessages([
@@ -534,7 +534,7 @@ class VehiculoIngresoService
                 'comentario_solicitud' => $comentarioSolicitud === '' ? null : $comentarioSolicitud,
             ]));
         } catch (Throwable $exception) {
-            if (! Storage::disk('local')->delete($rutasArchivosTemporales)) {
+            if (! Storage::disk(config('filesystems.default'))->delete($rutasArchivosTemporales)) {
                 Log::warning('Could not remove temporary files after a failed manual document submission.', [
                     'plate' => $placa,
                     'file_paths' => $rutasArchivosTemporales,
@@ -587,7 +587,7 @@ class VehiculoIngresoService
         $rutasArchivosTemporales = [];
 
         if ($documentoMatricula !== null) {
-            $rutaGuardada = $documentoMatricula->store('validacion-documentos', 'local');
+            $rutaGuardada = $documentoMatricula->store('validacion-documentos', config('filesystems.default'));
             if (! is_string($rutaGuardada)) {
                 throw ValidationException::withMessages([
                     'documento_matricula' => 'No se pudo guardar la matrícula para revisión manual. Inténtalo nuevamente.',
@@ -648,7 +648,7 @@ class VehiculoIngresoService
 
                 $rutasImagenesTemporales = [];
                 foreach ($imagenes as $imagen) {
-                    $rutaImagen = $imagen->store("validacion-documentos/{$validacion->id}/imagenes", 'local');
+                    $rutaImagen = $imagen->store("validacion-documentos/{$validacion->id}/imagenes", config('filesystems.default'));
 
                     if (! is_string($rutaImagen)) {
                         throw ValidationException::withMessages([
@@ -669,7 +669,7 @@ class VehiculoIngresoService
                 return $validacion;
             });
         } catch (Throwable $exception) {
-            if ($rutasArchivosTemporales !== [] && ! Storage::disk('local')->delete($rutasArchivosTemporales)) {
+            if ($rutasArchivosTemporales !== [] && ! Storage::disk(config('filesystems.default'))->delete($rutasArchivosTemporales)) {
                 Log::warning('Could not remove temporary files after a failed company vehicle submission.', [
                     'plate' => $placa,
                     'file_paths' => $rutasArchivosTemporales,
@@ -730,10 +730,10 @@ class VehiculoIngresoService
         $imagePaths = [];
 
         foreach ($images as $image) {
-            $imagePath = $image->store('vehiculos', 'public');
+            $imagePath = $image->store('vehiculos', config('filesystems.default'));
 
             if (! is_string($imagePath)) {
-                Storage::disk('public')->delete($imagePaths);
+                Storage::disk(config('filesystems.default'))->delete($imagePaths);
 
                 throw new RuntimeException('No se pudo guardar la imagen del vehículo.');
             }
@@ -837,7 +837,7 @@ class VehiculoIngresoService
             });
         } catch (Throwable $exception) {
             if ($imagePaths !== []) {
-                Storage::disk('public')->delete($imagePaths);
+                Storage::disk(config('filesystems.default'))->delete($imagePaths);
             }
 
             throw $exception;

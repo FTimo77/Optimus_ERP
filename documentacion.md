@@ -209,6 +209,21 @@ npm run build
 
 ## 7. Registro de Cambios Realizados por Agentes
 
+### 2026-11-26 — Migración de almacenamiento permanente de documentos y fotos a disco configurable (`config('filesystems.default')` / Cloudflare `r2`)
+- **Resumen funcional:** Se reemplazaron todas las referencias fijas a los discos `'local'` y `'public'` para documentos permanentes (matrículas, CUV, cédulas, contratos, constancias, pagarés, comprobantes de pago/abonos/multas) y fotografías comerciales de vehículos por `config('filesystems.default')` (configurado a `'r2'` vía `FILESYSTEM_DISK=r2` en `.env`). Los archivos temporales de 1 segundo usados por los scripts Node (`auditoria_completa.cjs`, `consultar_axis.cjs`, `escanear_gemini.cjs`) y la compilación temporal de plantillas Word (`PhpWord`) permanecen en `storage_path('app/...')` local y se eliminan inmediatamente en `finally`. Para el driver `s3`/`r2`, la generación de Word sube el `.docx` mediante `Storage::disk(...)->put()` (evitando `->path()` local) y las fotos comerciales se entregan mediante `temporaryUrl()` firmada (2 horas) sin requerir bucket público.
+- **Archivos modificados:**
+  - `app/Http/Controllers/MisVentasController.php`
+  - `app/Http/Controllers/ValidacionDocumentosController.php`
+  - `app/Services/ConstanciaVentaGeneratorService.php`
+  - `app/Services/PagareGeneratorService.php`
+  - `app/Services/Inventario/CustodiaDocumentosService.php`
+  - `app/Services/Inventario/InventarioConsultaService.php`
+  - `app/Services/Inventario/MultasPagosVehiculoService.php`
+  - `app/Services/VehiculoIngreso/AuditoriaVehicularService.php`
+  - `app/Services/VehiculoIngreso/VehiculoIngresoService.php`
+  - `documentacion.md`
+- **Comandos requeridos en local:** Verificar `FILESYSTEM_DISK=r2` y credenciales `R2_*` en `.env`, y ejecutar `php artisan config:clear`.
+
 ### 2026-11-26 — Corrección de cierre de sesiones y control de concurrencia local en `scripts/auditoria/cte.cjs`
 - **Resumen funcional:** Se corrigió la fuga de sesiones activas en `scripts/auditoria/cte.cjs`: se eliminó el caché incompleto `cte_session.json` (que omitía las cookies de `/AutoServicioConsultaInfracciones` y dejaba sesiones abiertas tras consultas exitosas), se añadió el cierre explícito de sesión en `finally` (`salir.jsp` + limpieza de cookies de la instancia), se agregó un cerrojo local (`cte_consulta.lock`) para evitar consultas simultáneas desde el ERP y una ventana de enfriamiento (`cte_cooldown.json`) cuando el portal reporta límite de sesiones activas, marcando `requiere_revision_manual: true` sin intentar evadir controles ni desafíos anti-bot.
 - **Archivos modificados:**

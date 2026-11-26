@@ -27,7 +27,7 @@ class MultasPagosVehiculoService
 
         $rutaComprobante = $comprobante->store(
             "vehiculos/{$vehiculo->id_vehiculo}/multas/{$multa->id_multa}",
-            'local',
+            config('filesystems.default'),
         );
 
         if ($rutaComprobante === false) {
@@ -55,7 +55,7 @@ class MultasPagosVehiculoService
                 ]);
             });
         } catch (Throwable $exception) {
-            if (! Storage::disk('local')->delete($rutaComprobante)) {
+            if (! Storage::disk(config('filesystems.default'))->delete($rutaComprobante)) {
                 Log::warning('Could not remove uploaded fine receipt after failed transaction.', [
                     'multa_id' => $multa->id_multa,
                     'file_path' => $rutaComprobante,
@@ -71,7 +71,7 @@ class MultasPagosVehiculoService
         abort_unless(
             $multa->id_vehiculo === $vehiculo->id_vehiculo
                 && $multa->ruta_comprobante_pago !== null
-                && Storage::disk('local')->exists($multa->ruta_comprobante_pago),
+                && Storage::disk(config('filesystems.default'))->exists($multa->ruta_comprobante_pago),
             404,
         );
 
@@ -80,7 +80,7 @@ class MultasPagosVehiculoService
             ? "comprobante-multa-{$vehiculo->id_vehiculo}-{$multa->id_multa}.{$extension}"
             : "comprobante-multa-{$vehiculo->id_vehiculo}-{$multa->id_multa}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $multa->ruta_comprobante_pago,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -97,7 +97,7 @@ class MultasPagosVehiculoService
         $costoAdquisicion = round((float) ($vehiculo->costo_adquisicion ?? 0), 2);
         $montoNuevo = round($monto, 2);
 
-        $ruta = $comprobante->store("vehiculos/{$vehiculo->id_vehiculo}/pagos", 'local');
+        $ruta = $comprobante->store("vehiculos/{$vehiculo->id_vehiculo}/pagos", config('filesystems.default'));
         if ($ruta === false) {
             throw new RuntimeException('No se pudo almacenar el comprobante del abono.');
         }
@@ -154,7 +154,7 @@ class MultasPagosVehiculoService
                 ]);
             });
         } catch (Throwable $exception) {
-            Storage::disk('local')->delete($ruta);
+            Storage::disk(config('filesystems.default'))->delete($ruta);
             throw $exception;
         }
     }
@@ -163,7 +163,7 @@ class MultasPagosVehiculoService
     {
         abort_unless(
             $pago->id_vehiculo === $vehiculo->id_vehiculo
-                && Storage::disk('local')->exists($pago->ruta_comprobante),
+                && Storage::disk(config('filesystems.default'))->exists($pago->ruta_comprobante),
             404,
         );
 
@@ -172,7 +172,7 @@ class MultasPagosVehiculoService
             ? "comprobante-pago-{$vehiculo->id_vehiculo}-{$pago->id_pago}.{$extension}"
             : "comprobante-pago-{$vehiculo->id_vehiculo}-{$pago->id_pago}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $pago->ruta_comprobante,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],

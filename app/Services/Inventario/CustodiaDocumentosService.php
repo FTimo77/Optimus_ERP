@@ -267,7 +267,7 @@ class CustodiaDocumentosService
         try {
             // Almacenamiento privado y seguro en disco local (nunca en public)
             if ($archivo1 !== null) {
-                $ruta = $archivo1->store("documentos/contratos/{$vehiculo->id_vehiculo}", 'local');
+                $ruta = $archivo1->store("documentos/contratos/{$vehiculo->id_vehiculo}", config('filesystems.default'));
                 if ($ruta === false) {
                     throw new RuntimeException('No se pudo almacenar el contrato 1 en el disco privado.');
                 }
@@ -276,7 +276,7 @@ class CustodiaDocumentosService
             }
 
             if ($archivo2 !== null) {
-                $ruta = $archivo2->store("documentos/contratos/{$vehiculo->id_vehiculo}", 'local');
+                $ruta = $archivo2->store("documentos/contratos/{$vehiculo->id_vehiculo}", config('filesystems.default'));
                 if ($ruta === false) {
                     throw new RuntimeException('No se pudo almacenar el contrato 2 en el disco privado.');
                 }
@@ -323,13 +323,13 @@ class CustodiaDocumentosService
             });
 
             foreach ($rutasAnteriores as $rutaAnterior) {
-                if (Storage::disk('local')->exists($rutaAnterior)) {
-                    Storage::disk('local')->delete($rutaAnterior);
+                if (Storage::disk(config('filesystems.default'))->exists($rutaAnterior)) {
+                    Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
                 }
             }
         } catch (Throwable $exception) {
             if ($rutasNuevas !== []) {
-                Storage::disk('local')->delete($rutasNuevas);
+                Storage::disk(config('filesystems.default'))->delete($rutasNuevas);
             }
             throw $exception;
         }
@@ -345,7 +345,7 @@ class CustodiaDocumentosService
         abort_unless(
             is_string($ruta)
                 && trim($ruta) !== ''
-                && Storage::disk('local')->exists($ruta),
+                && Storage::disk(config('filesystems.default'))->exists($ruta),
             404,
         );
 
@@ -355,7 +355,7 @@ class CustodiaDocumentosService
             ? "contrato{$sufijo}-{$vehiculo->id_vehiculo}.{$extension}"
             : "contrato{$sufijo}-{$vehiculo->id_vehiculo}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $ruta,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -385,7 +385,7 @@ class CustodiaDocumentosService
         $columna = $mapaColumnas[$tipo];
 
         // Almacenamiento privado y seguro exclusivamente en disco local (nunca en public)
-        $rutaNueva = $archivo->store("documentos/vehiculos/{$vehiculo->id_vehiculo}/{$tipo}", 'local');
+        $rutaNueva = $archivo->store("documentos/vehiculos/{$vehiculo->id_vehiculo}/{$tipo}", config('filesystems.default'));
         if ($rutaNueva === false) {
             throw new RuntimeException('No se pudo almacenar el documento en el disco privado.');
         }
@@ -413,15 +413,15 @@ class CustodiaDocumentosService
                 }
             });
         } catch (Throwable $exception) {
-            Storage::disk('local')->delete($rutaNueva);
+            Storage::disk(config('filesystems.default'))->delete($rutaNueva);
             throw $exception;
         }
 
         if (is_string($rutaAnterior)
             && $rutaAnterior !== ''
             && $rutaAnterior !== $rutaNueva
-            && Storage::disk('local')->exists($rutaAnterior)) {
-            Storage::disk('local')->delete($rutaAnterior);
+            && Storage::disk(config('filesystems.default'))->exists($rutaAnterior)) {
+            Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
         }
     }
 
@@ -464,12 +464,12 @@ class CustodiaDocumentosService
         abort_unless(
             is_string($ruta)
                 && trim($ruta) !== ''
-                && Storage::disk('local')->exists($ruta),
+                && Storage::disk(config('filesystems.default'))->exists($ruta),
             404,
         );
 
         if ($inline) {
-            return Storage::disk('local')->response($ruta, null, [
+            return Storage::disk(config('filesystems.default'))->response($ruta, null, [
                 'X-Content-Type-Options' => 'nosniff',
             ]);
         }
@@ -479,7 +479,7 @@ class CustodiaDocumentosService
             ? "{$tipo}-{$vehiculo->id_vehiculo}.{$extension}"
             : "{$tipo}-{$vehiculo->id_vehiculo}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $ruta,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],

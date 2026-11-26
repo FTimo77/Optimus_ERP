@@ -45,6 +45,7 @@ class PagareGeneratorService
 
         $token = bin2hex(random_bytes(12));
         $plantillaTemporal = storage_path("app/pagare_tpl_{$token}.docx");
+        $salidaTemporal = storage_path("app/pagare_out_{$token}.docx");
 
         try {
             $this->prepararPlantillaNormalizada($plantillaOriginal, $plantillaTemporal);
@@ -120,18 +121,16 @@ class PagareGeneratorService
                 $credito->id_credito,
                 Carbon::now('America/Guayaquil')->format('Ymd_His'),
             );
-            $rutaAbsoluta = Storage::disk('local')->path($rutaRelativa);
-            $directorio = dirname($rutaAbsoluta);
-
-            if (! is_dir($directorio) && ! mkdir($directorio, 0775, true) && ! is_dir($directorio)) {
-                throw new RuntimeException('No se pudo crear el directorio privado para guardar el pagaré.');
+            $template->saveAs($salidaTemporal);
+            $contenidoDocx = file_get_contents($salidaTemporal);
+            if ($contenidoDocx === false || ! Storage::disk(config('filesystems.default'))->put($rutaRelativa, $contenidoDocx)) {
+                throw new RuntimeException('No se pudo subir el pagaré generado al almacenamiento configurado.');
             }
-
-            $template->saveAs($rutaAbsoluta);
 
             return $rutaRelativa;
         } finally {
             @unlink($plantillaTemporal);
+            @unlink($salidaTemporal);
         }
     }
 
@@ -149,8 +148,8 @@ class PagareGeneratorService
             if (is_string($rutaAnterior)
                 && $rutaAnterior !== ''
                 && $rutaAnterior !== $rutaNueva
-                && Storage::disk('local')->exists($rutaAnterior)) {
-                Storage::disk('local')->delete($rutaAnterior);
+                && Storage::disk(config('filesystems.default'))->exists($rutaAnterior)) {
+                Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
             }
 
             return $rutaNueva;

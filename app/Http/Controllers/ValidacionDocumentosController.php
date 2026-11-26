@@ -274,7 +274,7 @@ class ValidacionDocumentosController extends Controller
         abort_unless($validacion->estado_revision !== 'borrador', 404);
         abort_unless($validacion->ruta_documento !== null, 404);
 
-        $disk = Storage::disk('local');
+        $disk = Storage::disk(config('filesystems.default'));
 
         abort_unless($disk->exists($validacion->ruta_documento), 404);
 
@@ -346,7 +346,7 @@ class ValidacionDocumentosController extends Controller
         abort_unless($validacion->estado_revision !== 'borrador', 404);
         abort_unless($validacion->ruta_cuv !== null, 404);
 
-        $disk = Storage::disk('local');
+        $disk = Storage::disk(config('filesystems.default'));
 
         abort_unless($disk->exists($validacion->ruta_cuv), 404);
 
@@ -920,7 +920,7 @@ class ValidacionDocumentosController extends Controller
             'propietarios' => $alertaPropietarios,
         ];
 
-        $rutaCuvNueva = $archivo->store("validacion-documentos/{$validacion->id}/cuv", 'local');
+        $rutaCuvNueva = $archivo->store("validacion-documentos/{$validacion->id}/cuv", config('filesystems.default'));
         if (! is_string($rutaCuvNueva)) {
             return response()->json([
                 'success' => false,
@@ -961,7 +961,7 @@ class ValidacionDocumentosController extends Controller
                 ]);
             });
         } catch (Throwable $exception) {
-            if (! Storage::disk('local')->delete($rutaCuvNueva)) {
+            if (! Storage::disk(config('filesystems.default'))->delete($rutaCuvNueva)) {
                 Log::warning('Uploaded CUV could not be removed after scan persistence failed.', [
                     'validacion_id' => $validacion->id,
                     'file_path' => $rutaCuvNueva,
@@ -973,7 +973,7 @@ class ValidacionDocumentosController extends Controller
 
         if ($rutaCuvAnterior !== null
             && $rutaCuvAnterior !== $rutaCuvNueva
-            && ! Storage::disk('local')->delete($rutaCuvAnterior)) {
+            && ! Storage::disk(config('filesystems.default'))->delete($rutaCuvAnterior)) {
             Log::warning('A replaced CUV could not be removed after scanning a new CUV.', [
                 'validacion_id' => $validacion->id,
                 'file_path' => $rutaCuvAnterior,
@@ -1012,7 +1012,7 @@ class ValidacionDocumentosController extends Controller
 
         $rutaCuvTemporal = $documentoCuv?->store(
             "validacion-documentos/{$validacion->id}/cuv",
-            'local',
+            config('filesystems.default'),
         );
 
         if ($documentoCuv !== null && ! is_string($rutaCuvTemporal)) {
@@ -1069,14 +1069,14 @@ class ValidacionDocumentosController extends Controller
             });
         } catch (Throwable $exception) {
             if ($rutasImagenesPublicas !== []
-                && ! Storage::disk('public')->delete($rutasImagenesPublicas)) {
+                && ! Storage::disk(config('filesystems.default'))->delete($rutasImagenesPublicas)) {
                 Log::error('Could not remove vehicle images after a failed review approval.', [
                     'validacion_id' => $validacion->id,
                     'image_paths' => $rutasImagenesPublicas,
                 ]);
             }
 
-            if ($rutaCuvTemporal !== null && ! Storage::disk('local')->delete($rutaCuvTemporal)) {
+            if ($rutaCuvTemporal !== null && ! Storage::disk(config('filesystems.default'))->delete($rutaCuvTemporal)) {
                 Log::warning('A newly uploaded CUV could not be removed after a failed review decision.', [
                     'validacion_id' => $validacion->id,
                     'file_path' => $rutaCuvTemporal,
@@ -1089,7 +1089,7 @@ class ValidacionDocumentosController extends Controller
         if ($rutaCuvTemporal !== null
             && $rutaCuvAnterior !== null
             && $rutaCuvAnterior !== $rutaCuvTemporal
-            && ! Storage::disk('local')->delete($rutaCuvAnterior)) {
+            && ! Storage::disk(config('filesystems.default'))->delete($rutaCuvAnterior)) {
             Log::warning('A replaced CUV could not be removed from temporary storage.', [
                 'validacion_id' => $validacion->id,
                 'file_path' => $rutaCuvAnterior,
@@ -1097,7 +1097,7 @@ class ValidacionDocumentosController extends Controller
         }
 
         if ($rutasImagenesTemporales !== []
-            && ! Storage::disk('local')->delete($rutasImagenesTemporales)) {
+            && ! Storage::disk(config('filesystems.default'))->delete($rutasImagenesTemporales)) {
             Log::warning('Approved vehicle images could not be removed from temporary storage.', [
                 'validacion_id' => $validacion->id,
                 'image_paths' => $rutasImagenesTemporales,
@@ -1115,7 +1115,7 @@ class ValidacionDocumentosController extends Controller
     {
         abort_unless(
             $validacion->ruta_comprobante_pago !== null
-                && Storage::disk('local')->exists($validacion->ruta_comprobante_pago),
+                && Storage::disk(config('filesystems.default'))->exists($validacion->ruta_comprobante_pago),
             404,
         );
 
@@ -1124,7 +1124,7 @@ class ValidacionDocumentosController extends Controller
             ? "comprobante-{$validacion->placa}.{$extension}"
             : "comprobante-{$validacion->placa}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $validacion->ruta_comprobante_pago,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1139,7 +1139,7 @@ class ValidacionDocumentosController extends Controller
 
         $rutaComprobante = $request->file('documento_comprobante')->store(
             "validacion-documentos/{$validacion->id}/comprobante",
-            'local',
+            config('filesystems.default'),
         );
 
         if ($rutaComprobante === false) {
@@ -1186,14 +1186,14 @@ class ValidacionDocumentosController extends Controller
             });
         } catch (Throwable $exception) {
             if ($rutasImagenesPublicas !== []
-                && ! Storage::disk('public')->delete($rutasImagenesPublicas)) {
+                && ! Storage::disk(config('filesystems.default'))->delete($rutasImagenesPublicas)) {
                 Log::error('Could not remove vehicle images after a failed payment receipt upload.', [
                     'validacion_id' => $validacion->id,
                     'image_paths' => $rutasImagenesPublicas,
                 ]);
             }
 
-            if (! Storage::disk('local')->delete($rutaComprobante)) {
+            if (! Storage::disk(config('filesystems.default'))->delete($rutaComprobante)) {
                 Log::warning('A newly uploaded payment receipt could not be removed after a failed upload.', [
                     'validacion_id' => $validacion->id,
                     'file_path' => $rutaComprobante,
@@ -1205,7 +1205,7 @@ class ValidacionDocumentosController extends Controller
 
         if ($rutaComprobanteAnterior !== null
             && $rutaComprobanteAnterior !== $rutaComprobante
-            && ! Storage::disk('local')->delete($rutaComprobanteAnterior)) {
+            && ! Storage::disk(config('filesystems.default'))->delete($rutaComprobanteAnterior)) {
             Log::warning('A replaced payment receipt could not be removed from temporary storage.', [
                 'validacion_id' => $validacion->id,
                 'file_path' => $rutaComprobanteAnterior,
@@ -1213,7 +1213,7 @@ class ValidacionDocumentosController extends Controller
         }
 
         if ($rutasImagenesTemporales !== []
-            && ! Storage::disk('local')->delete($rutasImagenesTemporales)) {
+            && ! Storage::disk(config('filesystems.default'))->delete($rutasImagenesTemporales)) {
             Log::warning('Approved vehicle images could not be removed from temporary storage.', [
                 'validacion_id' => $validacion->id,
                 'image_paths' => $rutasImagenesTemporales,
@@ -1278,9 +1278,9 @@ class ValidacionDocumentosController extends Controller
 
             foreach ($validated['cuotas'] as $index => $cuota) {
                 $archivoCuota = $request->file("cuotas.{$index}.comprobante");
-                $ruta = $archivoCuota->store("validacion-documentos/{$validacion->id}/pagos", 'local');
+                $ruta = $archivoCuota->store("validacion-documentos/{$validacion->id}/pagos", config('filesystems.default'));
                 if ($ruta === false) {
-                    Storage::disk('local')->delete($rutasSubidas);
+                    Storage::disk(config('filesystems.default'))->delete($rutasSubidas);
                     throw new RuntimeException('No se pudo almacenar uno de los comprobantes de cuota.');
                 }
 
@@ -1294,7 +1294,7 @@ class ValidacionDocumentosController extends Controller
             }
         } elseif ($formaPago === 'contado') {
             $archivoContado = $request->file('documento_comprobante');
-            $ruta = $archivoContado->store("validacion-documentos/{$validacion->id}/pagos", 'local');
+            $ruta = $archivoContado->store("validacion-documentos/{$validacion->id}/pagos", config('filesystems.default'));
             if ($ruta === false) {
                 throw new RuntimeException('No se pudo almacenar el comprobante de pago de contado.');
             }
@@ -1411,18 +1411,18 @@ class ValidacionDocumentosController extends Controller
             });
         } catch (Throwable $exception) {
             if ($rutasImagenesPublicas !== []) {
-                Storage::disk('public')->delete($rutasImagenesPublicas);
+                Storage::disk(config('filesystems.default'))->delete($rutasImagenesPublicas);
             }
 
             if ($rutasSubidas !== []) {
-                Storage::disk('local')->delete($rutasSubidas);
+                Storage::disk(config('filesystems.default'))->delete($rutasSubidas);
             }
 
             throw $exception;
         }
 
         if ($rutasImagenesTemporales !== []
-            && ! Storage::disk('local')->delete($rutasImagenesTemporales)) {
+            && ! Storage::disk(config('filesystems.default'))->delete($rutasImagenesTemporales)) {
             Log::warning('Approved vehicle images could not be removed from temporary storage.', [
                 'validacion_id' => $validacion->id,
                 'image_paths' => $rutasImagenesTemporales,
@@ -1439,7 +1439,7 @@ class ValidacionDocumentosController extends Controller
     {
         abort_unless(
             $pago->validacion_documento_id === $validacion->id
-                && Storage::disk('local')->exists($pago->ruta_comprobante),
+                && Storage::disk(config('filesystems.default'))->exists($pago->ruta_comprobante),
             404,
         );
 
@@ -1448,7 +1448,7 @@ class ValidacionDocumentosController extends Controller
             ? "comprobante-pago-{$validacion->placa}-{$pago->id_pago}.{$extension}"
             : "comprobante-pago-{$validacion->placa}-{$pago->id_pago}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $pago->ruta_comprobante,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1473,7 +1473,7 @@ class ValidacionDocumentosController extends Controller
         $costoAdquisicion = round((float) ($datosIngreso['costo_adquisicion'] ?? 0), 2);
         $montoNuevo = round((float) $validated['monto'], 2);
 
-        $ruta = $request->file('comprobante')->store("validacion-documentos/{$validacion->id}/pagos", 'local');
+        $ruta = $request->file('comprobante')->store("validacion-documentos/{$validacion->id}/pagos", config('filesystems.default'));
         if ($ruta === false) {
             throw new RuntimeException('No se pudo almacenar el comprobante de la cuota.');
         }
@@ -1533,7 +1533,7 @@ class ValidacionDocumentosController extends Controller
                 }
             });
         } catch (Throwable $exception) {
-            Storage::disk('local')->delete($ruta);
+            Storage::disk(config('filesystems.default'))->delete($ruta);
             throw $exception;
         }
 
@@ -1560,7 +1560,7 @@ class ValidacionDocumentosController extends Controller
         }
 
         $rutaAnterior = $validacion->ruta_cedula_cliente;
-        $rutaCedula = $archivo->store('documentos/cedulas', 'local');
+        $rutaCedula = $archivo->store('documentos/cedulas', config('filesystems.default'));
 
         if ($rutaCedula === false) {
             return response()->json([
@@ -1574,8 +1574,8 @@ class ValidacionDocumentosController extends Controller
             'ruta_cedula_cliente' => $rutaCedula,
         ]);
 
-        if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula && Storage::disk('local')->exists($rutaAnterior)) {
-            Storage::disk('local')->delete($rutaAnterior);
+        if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula && Storage::disk(config('filesystems.default'))->exists($rutaAnterior)) {
+            Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
         }
 
         $cedulaUrl = route('validacion-documentos.cedula', $validacion);
@@ -1777,15 +1777,7 @@ class ValidacionDocumentosController extends Controller
             preg_replace('/[^A-Z0-9]/i', '', $validacion->placa) ?: $validacion->id,
             $ahora->format('Ymd_His'),
         );
-        $rutaAbsoluta = Storage::disk('local')->path($rutaRelativa);
-        $directorio = dirname($rutaAbsoluta);
-
-        if (! is_dir($directorio) && ! mkdir($directorio, 0775, true) && ! is_dir($directorio)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No se pudo crear el directorio para guardar el contrato generado.',
-            ], 500);
-        }
+        $salidaTemporal = storage_path('app/contrato_compra_out_'.bin2hex(random_bytes(8)).'.docx');
 
         try {
             $template = new TemplateProcessor($plantilla);
@@ -1821,7 +1813,11 @@ class ValidacionDocumentosController extends Controller
             $template->setValue('costo_adquisicion', $costoFormateado);
             $template->setValue('costo_letras', $costoLetras);
 
-            $template->saveAs($rutaAbsoluta);
+            $template->saveAs($salidaTemporal);
+            $contenidoDocx = file_get_contents($salidaTemporal);
+            if ($contenidoDocx === false || ! Storage::disk(config('filesystems.default'))->put($rutaRelativa, $contenidoDocx)) {
+                throw new RuntimeException('No se pudo subir el contrato Word al almacenamiento configurado.');
+            }
         } catch (Throwable $exception) {
             Log::error('Error al generar contrato Word con PhpWord.', [
                 'validacion_id' => $validacion->id,
@@ -1832,6 +1828,8 @@ class ValidacionDocumentosController extends Controller
                 'success' => false,
                 'message' => 'No se pudo generar el documento Word del contrato: '.$exception->getMessage(),
             ], 500);
+        } finally {
+            @unlink($salidaTemporal);
         }
 
         $rutaAnterior = $validacion->ruta_contrato_generado;
@@ -1878,7 +1876,7 @@ class ValidacionDocumentosController extends Controller
             ]);
 
         if ($rutaAnterior !== null && $rutaAnterior !== $rutaRelativa) {
-            Storage::disk('local')->delete($rutaAnterior);
+            Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
         }
 
         return response()->json([
@@ -1893,11 +1891,11 @@ class ValidacionDocumentosController extends Controller
     {
         abort_unless(
             $validacion->ruta_contrato_generado !== null
-                && Storage::disk('local')->exists($validacion->ruta_contrato_generado),
+                && Storage::disk(config('filesystems.default'))->exists($validacion->ruta_contrato_generado),
             404,
         );
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $validacion->ruta_contrato_generado,
             "contrato-compra-venta-{$validacion->placa}.docx",
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1908,7 +1906,7 @@ class ValidacionDocumentosController extends Controller
     {
         abort_unless(
             $validacion->ruta_cedula_cliente !== null
-                && Storage::disk('local')->exists($validacion->ruta_cedula_cliente),
+                && Storage::disk(config('filesystems.default'))->exists($validacion->ruta_cedula_cliente),
             404,
         );
 
@@ -1917,7 +1915,7 @@ class ValidacionDocumentosController extends Controller
             ? "cedula-cliente-{$validacion->placa}.{$extension}"
             : "cedula-cliente-{$validacion->placa}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $validacion->ruta_cedula_cliente,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -2192,7 +2190,7 @@ class ValidacionDocumentosController extends Controller
 
         foreach ($rutasImagenesTemporales as $rutaImagenTemporal) {
             if (! str_starts_with($rutaImagenTemporal, $prefijoImagenesTemporales)
-                || ! Storage::disk('local')->exists($rutaImagenTemporal)) {
+                || ! Storage::disk(config('filesystems.default'))->exists($rutaImagenTemporal)) {
                 throw ValidationException::withMessages([
                     'decision' => 'No se encontró una imagen temporal del vehículo. Reenvía el expediente.',
                 ]);
@@ -2280,7 +2278,7 @@ class ValidacionDocumentosController extends Controller
         }
 
         if ($validacion->ruta_cuv !== null) {
-            if (! Storage::disk('local')->exists($validacion->ruta_cuv)) {
+            if (! Storage::disk(config('filesystems.default'))->exists($validacion->ruta_cuv)) {
                 throw ValidationException::withMessages([
                     'decision' => 'No se encontró el CUV adjunto al expediente. Verifica el archivo antes de aprobarlo.',
                 ]);
@@ -2290,7 +2288,7 @@ class ValidacionDocumentosController extends Controller
         }
 
         if ($validacion->ruta_comprobante_pago !== null) {
-            if (! Storage::disk('local')->exists($validacion->ruta_comprobante_pago)) {
+            if (! Storage::disk(config('filesystems.default'))->exists($validacion->ruta_comprobante_pago)) {
                 throw ValidationException::withMessages([
                     'documento_comprobante' => 'No se encontró el comprobante de pago adjunto al expediente.',
                 ]);
@@ -2305,10 +2303,10 @@ class ValidacionDocumentosController extends Controller
 
         foreach ($rutasImagenesTemporales as $index => $rutaImagenTemporal) {
             $rutaImagenPublica = "vehiculos/{$vehiculo->id_vehiculo}/".basename($rutaImagenTemporal);
-            $contenidoImagen = Storage::disk('local')->get($rutaImagenTemporal);
+            $contenidoImagen = Storage::disk(config('filesystems.default'))->get($rutaImagenTemporal);
             $rutasImagenesPublicas[] = $rutaImagenPublica;
 
-            if (! Storage::disk('public')->put($rutaImagenPublica, $contenidoImagen)) {
+            if (! Storage::disk(config('filesystems.default'))->put($rutaImagenPublica, $contenidoImagen)) {
                 throw new RuntimeException('No se pudo publicar una imagen del vehículo aprobado.');
             }
 

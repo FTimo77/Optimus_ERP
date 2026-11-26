@@ -283,6 +283,7 @@ class ConstanciaVentaGeneratorService
 
         $token = bin2hex(random_bytes(12));
         $plantillaTemporal = storage_path("app/constancia_tpl_{$token}.docx");
+        $salidaTemporal = storage_path("app/constancia_out_{$token}.docx");
 
         try {
             $this->prepararPlantillaNormalizada($plantillaOriginal, $plantillaTemporal);
@@ -437,18 +438,16 @@ class ConstanciaVentaGeneratorService
                 $ahora->format('Ymd_His'),
             );
 
-            $rutaAbsoluta = Storage::disk('local')->path($rutaRelativa);
-            $directorio = dirname($rutaAbsoluta);
-
-            if (! is_dir($directorio) && ! mkdir($directorio, 0775, true) && ! is_dir($directorio)) {
-                throw new RuntimeException('No se pudo crear el directorio privado para la constancia de venta.');
+            $template->saveAs($salidaTemporal);
+            $contenidoDocx = file_get_contents($salidaTemporal);
+            if ($contenidoDocx === false || ! Storage::disk(config('filesystems.default'))->put($rutaRelativa, $contenidoDocx)) {
+                throw new RuntimeException('No se pudo subir la constancia de venta al almacenamiento configurado.');
             }
-
-            $template->saveAs($rutaAbsoluta);
 
             return $rutaRelativa;
         } finally {
             @unlink($plantillaTemporal);
+            @unlink($salidaTemporal);
         }
     }
 

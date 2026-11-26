@@ -278,7 +278,7 @@ class MisVentasController extends Controller
             $tienePagare = $esModalidadCredito
                 && is_string($creditoModel->ruta_pagare)
                 && $creditoModel->ruta_pagare !== ''
-                && Storage::disk('local')->exists($creditoModel->ruta_pagare);
+                && Storage::disk(config('filesystems.default'))->exists($creditoModel->ruta_pagare);
 
             $creditoPayload = [
                 'id_credito' => $creditoModel->id_credito,
@@ -432,7 +432,7 @@ class MisVentasController extends Controller
                     'chasis' => $vehiculo?->chasis ?? '',
                     'motor' => $vehiculo?->motor ?? '',
                     'imagen_url' => $vehiculo?->imagenPrincipal
-                        ? Storage::disk('public')->url($vehiculo->imagenPrincipal->ruta_imagen)
+                        ? $this->obtenerUrlImagenPublica($vehiculo->imagenPrincipal->ruta_imagen)
                         : null,
                 ],
                 'pagos' => $venta->pagos->map(static fn (PagoVenta $pago): array => [
@@ -626,7 +626,7 @@ class MisVentasController extends Controller
         if ($formaPago === 'credito') {
             $tieneCedulaGuardada = is_string($venta->ruta_cedula_comprador)
                 && trim($venta->ruta_cedula_comprador) !== ''
-                && Storage::disk('local')->exists($venta->ruta_cedula_comprador);
+                && Storage::disk(config('filesystems.default'))->exists($venta->ruta_cedula_comprador);
 
             if (! $tieneCedulaGuardada) {
                 throw ValidationException::withMessages([
@@ -728,7 +728,7 @@ class MisVentasController extends Controller
                 : self::TASA_MENSUAL_MES_13_PCT;
 
             if ($montoInicialCredito > 0 && $request->hasFile('comprobante_inicial')) {
-                $rutaInicial = $request->file('comprobante_inicial')->store("ventas/{$venta->id_venta}/pagos", 'local');
+                $rutaInicial = $request->file('comprobante_inicial')->store("ventas/{$venta->id_venta}/pagos", config('filesystems.default'));
                 if (! is_string($rutaInicial)) {
                     throw ValidationException::withMessages([
                         'comprobante_inicial' => 'No se pudo almacenar el comprobante de entrada en el disco privado.',
@@ -833,9 +833,9 @@ class MisVentasController extends Controller
 
             foreach ($request->file('cuotas', []) as $idx => $archivosItem) {
                 $archivoCuota = $archivosItem['comprobante'] ?? null;
-                $ruta = $archivoCuota?->store("ventas/{$venta->id_venta}/pagos", 'local');
+                $ruta = $archivoCuota?->store("ventas/{$venta->id_venta}/pagos", config('filesystems.default'));
                 if (! is_string($ruta)) {
-                    Storage::disk('local')->delete($rutasSubidas);
+                    Storage::disk(config('filesystems.default'))->delete($rutasSubidas);
                     throw ValidationException::withMessages([
                         'cuotas' => 'No se pudo almacenar uno de los comprobantes en el disco privado.',
                     ]);
@@ -867,9 +867,9 @@ class MisVentasController extends Controller
 
                 foreach ($request->file('pagos_contado', []) as $idx => $archivosItem) {
                     $archivoContado = $archivosItem['comprobante'] ?? null;
-                    $ruta = $archivoContado?->store("ventas/{$venta->id_venta}/pagos", 'local');
+                    $ruta = $archivoContado?->store("ventas/{$venta->id_venta}/pagos", config('filesystems.default'));
                     if (! is_string($ruta)) {
-                        Storage::disk('local')->delete($rutasSubidas);
+                        Storage::disk(config('filesystems.default'))->delete($rutasSubidas);
                         throw ValidationException::withMessages([
                             'pagos_contado' => 'No se pudo almacenar uno de los comprobantes de contado en el disco privado.',
                         ]);
@@ -886,7 +886,7 @@ class MisVentasController extends Controller
                 }
             } else {
                 $archivoContado = $request->file('documento_comprobante');
-                $ruta = $archivoContado?->store("ventas/{$venta->id_venta}/pagos", 'local');
+                $ruta = $archivoContado?->store("ventas/{$venta->id_venta}/pagos", config('filesystems.default'));
                 if (! is_string($ruta)) {
                     throw ValidationException::withMessages([
                         'documento_comprobante' => 'No se pudo almacenar el comprobante de pago en el disco privado.',
@@ -1060,7 +1060,7 @@ class MisVentasController extends Controller
             });
         } catch (Throwable $exception) {
             if ($rutasSubidas !== []) {
-                Storage::disk('local')->delete($rutasSubidas);
+                Storage::disk(config('filesystems.default'))->delete($rutasSubidas);
             }
 
             throw $exception;
@@ -1178,7 +1178,7 @@ class MisVentasController extends Controller
             'fecha_pago' => ['nullable', 'date'],
         ]);
 
-        $ruta = $request->file('comprobante')->store("ventas/{$venta->id_venta}/pagos", 'local');
+        $ruta = $request->file('comprobante')->store("ventas/{$venta->id_venta}/pagos", config('filesystems.default'));
         if (! is_string($ruta)) {
             throw ValidationException::withMessages([
                 'comprobante' => 'No se pudo almacenar el comprobante en el disco privado.',
@@ -1254,7 +1254,7 @@ class MisVentasController extends Controller
                 }
             });
         } catch (Throwable $exception) {
-            Storage::disk('local')->delete($ruta);
+            Storage::disk(config('filesystems.default'))->delete($ruta);
             throw $exception;
         }
 
@@ -1267,7 +1267,7 @@ class MisVentasController extends Controller
         abort_unless(
             $pago->id_venta === $venta->id_venta
                 && is_string($pago->ruta_comprobante)
-                && Storage::disk('local')->exists($pago->ruta_comprobante),
+                && Storage::disk(config('filesystems.default'))->exists($pago->ruta_comprobante),
             404,
         );
 
@@ -1276,7 +1276,7 @@ class MisVentasController extends Controller
             ? "comprobante-venta-{$venta->id_vehiculo}-{$pago->id_pago_venta}.{$extension}"
             : "comprobante-venta-{$venta->id_vehiculo}-{$pago->id_pago_venta}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $pago->ruta_comprobante,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1304,7 +1304,7 @@ class MisVentasController extends Controller
         }
 
         $rutaAnterior = $venta->ruta_cedula_comprador;
-        $rutaCedula = $archivo->store('documentos/cedulas', 'local');
+        $rutaCedula = $archivo->store('documentos/cedulas', config('filesystems.default'));
 
         if ($rutaCedula === false) {
             return response()->json([
@@ -1318,8 +1318,8 @@ class MisVentasController extends Controller
             'ruta_cedula_comprador' => $rutaCedula,
         ]);
 
-        if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula && Storage::disk('local')->exists($rutaAnterior)) {
-            Storage::disk('local')->delete($rutaAnterior);
+        if ($rutaAnterior !== null && $rutaAnterior !== $rutaCedula && Storage::disk(config('filesystems.default'))->exists($rutaAnterior)) {
+            Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
         }
 
         $cedulaUrl = route('mis-ventas.cedula', $venta->id_venta);
@@ -1674,7 +1674,7 @@ class MisVentasController extends Controller
             ]);
 
         if ($rutaAnterior !== null && $rutaAnterior !== $rutaRelativa) {
-            Storage::disk('local')->delete($rutaAnterior);
+            Storage::disk(config('filesystems.default'))->delete($rutaAnterior);
         }
 
         return response()->json([
@@ -1690,13 +1690,13 @@ class MisVentasController extends Controller
         abort_unless($this->puedeAccederVenta($request->user(), $venta), 403);
         abort_unless(
             $venta->ruta_constancia_generada !== null
-                && Storage::disk('local')->exists($venta->ruta_constancia_generada),
+                && Storage::disk(config('filesystems.default'))->exists($venta->ruta_constancia_generada),
             404,
         );
 
         $prefijo = ($venta->tipo_operacion ?? 'venta') === 'reserva' ? 'constancia-reserva' : 'constancia-venta';
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $venta->ruta_constancia_generada,
             "{$prefijo}-{$venta->id_vehiculo}.docx",
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1708,7 +1708,7 @@ class MisVentasController extends Controller
         abort_unless($this->puedeAccederVenta($request->user(), $venta), 403);
         abort_unless(
             $venta->ruta_cedula_comprador !== null
-                && Storage::disk('local')->exists($venta->ruta_cedula_comprador),
+                && Storage::disk(config('filesystems.default'))->exists($venta->ruta_cedula_comprador),
             404,
         );
 
@@ -1717,7 +1717,7 @@ class MisVentasController extends Controller
             ? "cedula-comprador-{$venta->id_vehiculo}.{$extension}"
             : "cedula-comprador-{$venta->id_vehiculo}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $venta->ruta_cedula_comprador,
             $nombreDescarga,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1752,7 +1752,7 @@ class MisVentasController extends Controller
         // Almacenamiento privado obligatorio en disco 'local'
         $rutaComprobante = $request->file('comprobante')->store(
             "ventas/{$venta->id_venta}/creditos/{$credito->id_credito}/pagos",
-            'local',
+            config('filesystems.default'),
         );
 
         if (! is_string($rutaComprobante)) {
@@ -1895,7 +1895,7 @@ class MisVentasController extends Controller
                 ]);
             });
         } catch (Throwable $exception) {
-            Storage::disk('local')->delete($rutaComprobante);
+            Storage::disk(config('filesystems.default'))->delete($rutaComprobante);
             throw $exception;
         }
 
@@ -1914,19 +1914,19 @@ class MisVentasController extends Controller
         abort_unless(
             is_string($credito->ruta_pagare)
                 && $credito->ruta_pagare !== ''
-                && Storage::disk('local')->exists($credito->ruta_pagare),
+                && Storage::disk(config('filesystems.default'))->exists($credito->ruta_pagare),
             404,
         );
 
         if ($request->boolean('inline')) {
-            return Storage::disk('local')->response($credito->ruta_pagare, null, [
+            return Storage::disk(config('filesystems.default'))->response($credito->ruta_pagare, null, [
                 'X-Content-Type-Options' => 'nosniff',
             ]);
         }
 
         $extension = pathinfo($credito->ruta_pagare, PATHINFO_EXTENSION) ?: 'docx';
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $credito->ruta_pagare,
             "pagare-amortizacion-{$venta->id_vehiculo}-{$credito->id_credito}.{$extension}",
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1945,12 +1945,12 @@ class MisVentasController extends Controller
         abort_unless(
             is_string($pagoCredito->ruta_comprobante)
                 && $pagoCredito->ruta_comprobante !== ''
-                && Storage::disk('local')->exists($pagoCredito->ruta_comprobante),
+                && Storage::disk(config('filesystems.default'))->exists($pagoCredito->ruta_comprobante),
             404,
         );
 
         if ($request->boolean('inline')) {
-            return Storage::disk('local')->response($pagoCredito->ruta_comprobante, null, [
+            return Storage::disk(config('filesystems.default'))->response($pagoCredito->ruta_comprobante, null, [
                 'X-Content-Type-Options' => 'nosniff',
             ]);
         }
@@ -1960,7 +1960,7 @@ class MisVentasController extends Controller
             ? "comprobante-credito-{$venta->id_vehiculo}-{$credito->id_credito}-{$pagoCredito->id_pago_credito}.{$extension}"
             : "comprobante-credito-{$venta->id_vehiculo}-{$credito->id_credito}-{$pagoCredito->id_pago_credito}";
 
-        return Storage::disk('local')->download(
+        return Storage::disk(config('filesystems.default'))->download(
             $pagoCredito->ruta_comprobante,
             $nombre,
             ['X-Content-Type-Options' => 'nosniff'],
@@ -1999,52 +1999,67 @@ class MisVentasController extends Controller
             preg_replace('/[^A-Z0-9]/i', '', $venta->id_vehiculo) ?: $venta->id_venta,
             $ahora->format('Ymd_His'),
         );
-        $rutaAbsoluta = Storage::disk('local')->path($rutaRelativa);
-        $directorio = dirname($rutaAbsoluta);
-
-        if (! is_dir($directorio) && ! mkdir($directorio, 0775, true) && ! is_dir($directorio)) {
-            throw new RuntimeException('No se pudo crear el directorio privado para la constancia.');
-        }
+        $salidaTemporal = storage_path('app/constancia_legacy_'.bin2hex(random_bytes(8)).'.docx');
 
         $esCasado = (bool) ($datosComprador['es_casado'] ?? false);
         $nombreConyuge = (string) ($datosComprador['nombre_conyuge'] ?? '');
         $cedulaConyuge = (string) ($datosComprador['cedula_conyuge'] ?? '');
 
-        $template = new TemplateProcessor($rutaPlantilla);
-        $template->setValue('dia_letras', $this->numeroALetras($diaNum));
-        $template->setValue('dia', (string) $diaNum);
-        $template->setValue('mes', $mesNombre);
-        $template->setValue('anio_letra', $this->numeroALetras($anioNum));
-        $template->setValue('anio', (string) $anioNum);
+        try {
+            $template = new TemplateProcessor($rutaPlantilla);
+            $template->setValue('dia_letras', $this->numeroALetras($diaNum));
+            $template->setValue('dia', (string) $diaNum);
+            $template->setValue('mes', $mesNombre);
+            $template->setValue('anio_letra', $this->numeroALetras($anioNum));
+            $template->setValue('anio', (string) $anioNum);
 
-        $template->setValue('cliente', (string) ($datosComprador['nombre_completo'] ?? ''));
-        $template->setValue('ci_cliente', (string) ($datosComprador['cedula'] ?? ''));
+            $template->setValue('cliente', (string) ($datosComprador['nombre_completo'] ?? ''));
+            $template->setValue('ci_cliente', (string) ($datosComprador['cedula'] ?? ''));
 
-        $textoConyugeClausula = $esCasado && $nombreConyuge !== '' ? "y su cónyuge {$nombreConyuge}" : '';
-        $textoConyugeFirma = $esCasado ? $nombreConyuge : '';
-        $template->setValue('esta_casado', $textoConyugeClausula, 1);
-        $template->setValue('esta_casado', $textoConyugeFirma, 1);
-        $template->setValue('ci_esta_casado', $esCasado ? $cedulaConyuge : '');
+            $textoConyugeClausula = $esCasado && $nombreConyuge !== '' ? "y su cónyuge {$nombreConyuge}" : '';
+            $textoConyugeFirma = $esCasado ? $nombreConyuge : '';
+            $template->setValue('esta_casado', $textoConyugeClausula, 1);
+            $template->setValue('esta_casado', $textoConyugeFirma, 1);
+            $template->setValue('ci_esta_casado', $esCasado ? $cedulaConyuge : '');
 
-        $template->setValue('marca_vehiculo', (string) ($vehiculo?->marca?->nombre ?? ''));
-        $template->setValue('modelo_vehiculo ', (string) ($vehiculo?->modelo ?? ''));
-        $template->setValue('modelo_vehiculo', (string) ($vehiculo?->modelo ?? ''));
-        $template->setValue('anio_vehiculo ', (string) ($vehiculo?->anio ?? ''));
-        $template->setValue('anio_vehiculo', (string) ($vehiculo?->anio ?? ''));
-        $template->setValue('color_vehiculo ', (string) ($vehiculo?->color?->nombre ?? ''));
-        $template->setValue('color_vehiculo', (string) ($vehiculo?->color?->nombre ?? ''));
-        $template->setValue('chasis_vehiculo ', (string) ($vehiculo?->chasis ?? ''));
-        $template->setValue('chasis_vehiculo', (string) ($vehiculo?->chasis ?? ''));
-        $template->setValue('motor_vehiculo ', (string) ($vehiculo?->motor ?? ''));
-        $template->setValue('motor_vehiculo', (string) ($vehiculo?->motor ?? ''));
-        $template->setValue('id_vehiculo', (string) $venta->id_vehiculo);
+            $template->setValue('marca_vehiculo', (string) ($vehiculo?->marca?->nombre ?? ''));
+            $template->setValue('modelo_vehiculo ', (string) ($vehiculo?->modelo ?? ''));
+            $template->setValue('modelo_vehiculo', (string) ($vehiculo?->modelo ?? ''));
+            $template->setValue('anio_vehiculo ', (string) ($vehiculo?->anio ?? ''));
+            $template->setValue('anio_vehiculo', (string) ($vehiculo?->anio ?? ''));
+            $template->setValue('color_vehiculo ', (string) ($vehiculo?->color?->nombre ?? ''));
+            $template->setValue('color_vehiculo', (string) ($vehiculo?->color?->nombre ?? ''));
+            $template->setValue('chasis_vehiculo ', (string) ($vehiculo?->chasis ?? ''));
+            $template->setValue('chasis_vehiculo', (string) ($vehiculo?->chasis ?? ''));
+            $template->setValue('motor_vehiculo ', (string) ($vehiculo?->motor ?? ''));
+            $template->setValue('motor_vehiculo', (string) ($vehiculo?->motor ?? ''));
+            $template->setValue('id_vehiculo', (string) $venta->id_vehiculo);
 
-        $template->setValue('costo_adquisicion', $precioFormateado);
-        $template->setValue('costo_letras', $precioLetras);
+            $template->setValue('costo_adquisicion', $precioFormateado);
+            $template->setValue('costo_letras', $precioLetras);
 
-        $template->saveAs($rutaAbsoluta);
+            $template->saveAs($salidaTemporal);
+            $contenido = file_get_contents($salidaTemporal);
+            if ($contenido === false || ! Storage::disk(config('filesystems.default'))->put($rutaRelativa, $contenido)) {
+                throw new RuntimeException('No se pudo subir la constancia al almacenamiento configurado.');
+            }
+        } finally {
+            @unlink($salidaTemporal);
+        }
 
         return $rutaRelativa;
+    }
+
+    private function obtenerUrlImagenPublica(string $rutaImagen): string
+    {
+        $diskName = (string) config('filesystems.default', 'local');
+        $disk = Storage::disk($diskName);
+
+        if (config("filesystems.disks.{$diskName}.driver") === 's3') {
+            return $disk->temporaryUrl($rutaImagen, now()->addHours(2));
+        }
+
+        return $disk->url($rutaImagen);
     }
 
     /**
@@ -2176,8 +2191,8 @@ class MisVentasController extends Controller
         // Si existía un crédito previo (ej. rechazado y reconfigurado), limpiamos sus cuotas previas
         $previos = Credito::query()->where('id_venta', $venta->id_venta)->get();
         foreach ($previos as $previo) {
-            if (is_string($previo->ruta_pagare) && $previo->ruta_pagare !== '' && Storage::disk('local')->exists($previo->ruta_pagare)) {
-                Storage::disk('local')->delete($previo->ruta_pagare);
+            if (is_string($previo->ruta_pagare) && $previo->ruta_pagare !== '' && Storage::disk(config('filesystems.default'))->exists($previo->ruta_pagare)) {
+                Storage::disk(config('filesystems.default'))->delete($previo->ruta_pagare);
             }
             $previo->delete();
         }
@@ -2291,8 +2306,8 @@ class MisVentasController extends Controller
     ): void {
         $previos = Credito::query()->where('id_venta', $venta->id_venta)->get();
         foreach ($previos as $previo) {
-            if (is_string($previo->ruta_pagare) && $previo->ruta_pagare !== '' && Storage::disk('local')->exists($previo->ruta_pagare)) {
-                Storage::disk('local')->delete($previo->ruta_pagare);
+            if (is_string($previo->ruta_pagare) && $previo->ruta_pagare !== '' && Storage::disk(config('filesystems.default'))->exists($previo->ruta_pagare)) {
+                Storage::disk(config('filesystems.default'))->delete($previo->ruta_pagare);
             }
             $previo->delete();
         }

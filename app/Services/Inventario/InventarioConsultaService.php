@@ -164,7 +164,7 @@ class InventarioConsultaService
         $vehiculo->setAttribute(
             'imagen_url',
             $vehiculo->imagenPrincipal
-                ? Storage::disk('public')->url($vehiculo->imagenPrincipal->ruta_imagen)
+                ? $this->obtenerUrlImagenPublica($vehiculo->imagenPrincipal->ruta_imagen)
                 : null,
         );
 
@@ -266,7 +266,7 @@ class InventarioConsultaService
         $rutaMatricula = $vehiculo->documentos?->ruta_matricula ?? $validacion?->ruta_documento;
         $tieneMatriculaCargada = (is_string($rutaMatricula)
             && trim($rutaMatricula) !== ''
-            && Storage::disk('local')->exists($rutaMatricula))
+            && Storage::disk(config('filesystems.default'))->exists($rutaMatricula))
             || $custodiaMatricula?->estado === 'recibido';
 
         $vehiculo->setAttribute('custodia_actual', $custodiaActual);
@@ -326,12 +326,12 @@ class InventarioConsultaService
         $rutaContratoDoc = $vehiculo->documentos?->ruta_contrato;
         $tieneContratoCargado = is_string($rutaContratoDoc)
             && trim($rutaContratoDoc) !== ''
-            && Storage::disk('local')->exists($rutaContratoDoc);
+            && Storage::disk(config('filesystems.default'))->exists($rutaContratoDoc);
 
         $rutaContratoDoc2 = $vehiculo->documentos?->ruta_contrato_2;
         $tieneContrato2Cargado = is_string($rutaContratoDoc2)
             && trim($rutaContratoDoc2) !== ''
-            && Storage::disk('local')->exists($rutaContratoDoc2);
+            && Storage::disk(config('filesystems.default'))->exists($rutaContratoDoc2);
 
         $contratosCompletos = ! $requiereDocContrato
             || ($esDobleContrato ? ($tieneContratoCargado && $tieneContrato2Cargado) : $tieneContratoCargado);
@@ -394,7 +394,7 @@ class InventarioConsultaService
         foreach ($rutas as $clave => [$nombre, $ruta]) {
             $disponible = is_string($ruta)
                 && trim($ruta) !== ''
-                && Storage::disk('local')->exists($ruta);
+                && Storage::disk(config('filesystems.default'))->exists($ruta);
 
             if ($disponible) {
                 $expediente[] = [
@@ -413,7 +413,7 @@ class InventarioConsultaService
                 $ruta = $rutas[$clave][1] ?? null;
                 $disponible = is_string($ruta)
                     && trim($ruta) !== ''
-                    && Storage::disk('local')->exists($ruta);
+                    && Storage::disk(config('filesystems.default'))->exists($ruta);
 
                 $documentosNuevo[] = [
                     'clave' => $clave,
@@ -442,7 +442,7 @@ class InventarioConsultaService
         }
 
         if ($extension === 'pdf') {
-            $contenido = Storage::disk('local')->get($ruta);
+            $contenido = Storage::disk(config('filesystems.default'))->get($ruta);
             if (! is_string($contenido) || $contenido === '') {
                 return null;
             }
@@ -459,18 +459,41 @@ class InventarioConsultaService
         }
 
         if ($extension === 'docx' && class_exists(ZipArchive::class)) {
-            $rutaAbsoluta = Storage::disk('local')->path($ruta);
-            $zip = new ZipArchive();
-            if ($zip->open($rutaAbsoluta) === true) {
-                $appXml = $zip->getFromName('docProps/app.xml');
-                $zip->close();
-                if (is_string($appXml) && preg_match('/<Pages>(\d+)<\/Pages>/', $appXml, $m)) {
-                    return max(1, (int) $m[1]);
+            $contenidoDocx = Storage::disk(config('filesystems.default'))->get($ruta);
+            if (! is_string($contenidoDocx) || $contenidoDocx === '') {
+                return null;
+            }
+
+            $tempDocx = storage_path('app/docx_cnt_'.bin2hex(random_bytes(8)).'.docx');
+            try {
+                if (file_put_contents($tempDocx, $contenidoDocx) !== false) {
+                    $zip = new ZipArchive();
+                    if ($zip->open($tempDocx) === true) {
+                        $appXml = $zip->getFromName('docProps/app.xml');
+                        $zip->close();
+                        if (is_string($appXml) && preg_match('/<Pages>(\d+)<\/Pages>/', $appXml, $m)) {
+                            return max(1, (int) $m[1]);
+                        }
+                    }
                 }
+            } finally {
+                @unlink($tempDocx);
             }
         }
 
         return null;
+    }
+
+    private function obtenerUrlImagenPublica(string $rutaImagen): string
+    {
+        $diskName = (string) config('filesystems.default', 'local');
+        $disk = Storage::disk($diskName);
+
+        if (config("filesystems.disks.{$diskName}.driver") === 's3') {
+            return $disk->temporaryUrl($rutaImagen, now()->addHours(2));
+        }
+
+        return $disk->url($rutaImagen);
     }
 
     /**
