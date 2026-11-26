@@ -112,4 +112,10 @@ class Venta extends Model
         return $this->hasOne(Credito::class, 'id_venta', 'id_venta')
             ->latestOfMany('id_credito');
     }
+
+    public function cuotasCredito(): HasMany
+    {
+        return $this->hasMany(CuotaCredito::class, 'id_venta', 'id_venta')
+            ->orderBy('numero_cuota');
+    }
 }

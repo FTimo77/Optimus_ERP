@@ -30,6 +30,7 @@ class Vehiculo extends Model
         'id_patio',
         'id_estado',
         'id_proveedor',
+        'id_cliente_vendedor',
         'modelo',
         'anio',
         'motor',
@@ -99,6 +100,11 @@ class Vehiculo extends Model
     public function proveedor()
     {
         return $this->belongsTo(Proveedor::class, 'id_proveedor', 'id_proveedor');
+    }
+
+    public function clienteVendedor(): BelongsTo
+    {
+        return $this->belongsTo(Cliente::class, 'id_cliente_vendedor', 'id_cliente');
     }
 
     public function tipoVehiculo(): BelongsTo

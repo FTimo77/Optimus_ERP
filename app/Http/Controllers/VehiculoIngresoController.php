@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\clase_vehiculo;
+use App\Models\Cliente;
 use App\Models\color_vehiculo;
 use App\Models\marca_vehiculo;
 use App\Models\pais;
@@ -41,6 +42,43 @@ class VehiculoIngresoController extends Controller
     public function store(Request $request): RedirectResponse
     {
         return $this->vehiculoIngresoService->registrarIngreso($request);
+    }
+
+    public function buscarClientePorCedula(Request $request): JsonResponse
+    {
+        $cedula = preg_replace('/[^0-9A-Za-z]/', '', (string) $request->query('cedula', '')) ?? '';
+
+        if (strlen($cedula) < 6) {
+            return response()->json([
+                'found' => false,
+                'message' => 'Ingresa al menos 6 dígitos de la cédula o RUC.',
+            ]);
+        }
+
+        $cliente = Cliente::query()
+            ->with('tipoCliente')
+            ->where('cedula', $cedula)
+            ->first();
+
+        if ($cliente === null) {
+            return response()->json([
+                'found' => false,
+                'message' => 'Cédula no registrada en clientes. Se creará automáticamente como Vendedor.',
+            ]);
+        }
+
+        return response()->json([
+            'found' => true,
+            'cliente' => [
+                'id_cliente' => $cliente->id_cliente,
+                'cedula' => $cliente->cedula,
+                'nombre_completo' => $cliente->nombre_completo,
+                'telefono' => $cliente->telefono ?? '',
+                'direccion' => $cliente->direccion ?? '',
+                'correo' => $cliente->correo ?? '',
+                'tipo_cliente' => $cliente->tipoCliente?->nombre ?? 'Comprador',
+            ],
+        ]);
     }
 
     public function consultarAxisCloud(Request $request): JsonResponse

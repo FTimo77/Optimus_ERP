@@ -55,6 +55,9 @@ return [
     'url' => env('APP_URL', 'http://localhost'),
 
     'correo_beneficiario_pagare' => env('CORREO_BENEFICIARIO_PAGARE', env('MAIL_FROM_ADDRESS', 'gerencia@optimusautos.ec')),
+    'banco_concesionario' => env('BANCO_CONCESIONARIO', ''),
+    'cuenta_bancaria_concesionario' => env('CUENTA_BANCARIA_CONCESIONARIO', ''),
+    'titular_cuenta_concesionario' => env('TITULAR_CUENTA_CONCESIONARIO', 'HUGO DANIEL SORIA ROBALINO'),
 
     /*
     |--------------------------------------------------------------------------

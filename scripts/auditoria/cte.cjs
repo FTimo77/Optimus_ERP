@@ -1,5 +1,6 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const path = require('path');
 
 if (!process.env.PUPPETEER_CACHE_DIR && process.platform === 'win32') {
     process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\LENOVO\\.cache\\puppeteer';
@@ -17,6 +18,17 @@ const placa = /^([A-Z]{3})(\d{3})$/.test(placaRaw)
     ? placaRaw.replace(/^([A-Z]{3})(\d{3})$/, '$10$2')
     : placaRaw;
 
+const dirStorageApp = path.resolve(__dirname, '../../storage/app');
+const rutaSesionLegacy = path.join(dirStorageApp, 'cte_session.json');
+const rutaLockCTE = path.join(dirStorageApp, 'cte_consulta.lock');
+const rutaCooldownCTE = path.join(dirStorageApp, 'cte_cooldown.json');
+
+const LOCK_STALE_MS = 45000;
+const LOCK_WAIT_MAX_MS = 35000;
+const COOLDOWN_LIMITE_SESIONES_MS = 90000;
+
+const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function obtenerRutaNavegadorWindows() {
     if (process.platform !== 'win32') return undefined;
     const rutas = [
@@ -31,6 +43,73 @@ function obtenerRutaNavegadorWindows() {
     return undefined;
 }
 
+async function adquirirLockLocal() {
+    fs.mkdirSync(dirStorageApp, { recursive: true });
+    const inicio = Date.now();
+
+    while (Date.now() - inicio < LOCK_WAIT_MAX_MS) {
+        try {
+            if (fs.existsSync(rutaLockCTE)) {
+                const stat = fs.statSync(rutaLockCTE);
+                if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+                    fs.unlinkSync(rutaLockCTE);
+                }
+            }
+            const fd = fs.openSync(rutaLockCTE, 'wx');
+            fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), 'utf8');
+            fs.closeSync(fd);
+            return true;
+        } catch (err) {
+            if (err && err.code !== 'EEXIST') {
+                return false;
+            }
+            await esperar(400);
+        }
+    }
+
+    return false;
+}
+
+function liberarLockLocal() {
+    try {
+        if (fs.existsSync(rutaLockCTE)) {
+            fs.unlinkSync(rutaLockCTE);
+        }
+    } catch (e) {}
+}
+
+function verificarCooldownActivo() {
+    try {
+        if (!fs.existsSync(rutaCooldownCTE)) return null;
+        const data = JSON.parse(fs.readFileSync(rutaCooldownCTE, 'utf8'));
+        const restanteMs = (data?.hasta || 0) - Date.now();
+        if (restanteMs > 0) {
+            return Math.ceil(restanteMs / 1000);
+        }
+        fs.unlinkSync(rutaCooldownCTE);
+    } catch (e) {}
+    return null;
+}
+
+function registrarCooldownLimiteSesiones() {
+    try {
+        fs.mkdirSync(dirStorageApp, { recursive: true });
+        fs.writeFileSync(
+            rutaCooldownCTE,
+            JSON.stringify({ hasta: Date.now() + COOLDOWN_LIMITE_SESIONES_MS }),
+            'utf8'
+        );
+    } catch (e) {}
+}
+
+function limpiarCookiesLegacy() {
+    try {
+        if (fs.existsSync(rutaSesionLegacy)) {
+            fs.unlinkSync(rutaSesionLegacy);
+        }
+    } catch (e) {}
+}
+
 function procesarRespuestaCTE(jsonCTE, placaBuscada, debugExtra) {
     if (!jsonCTE || !jsonCTE.lsTotales) {
         return {
@@ -41,6 +120,7 @@ function procesarRespuestaCTE(jsonCTE, placaBuscada, debugExtra) {
             cantidad: 0,
             total: 0,
             listado: [],
+            requiere_revision_manual: true,
             error: jsonCTE?.lsError || jsonCTE?.error_script || 'Sin respuesta de CTE AxisCloud',
             debug: debugExtra || undefined
         };
@@ -108,32 +188,68 @@ function procesarRespuestaCTE(jsonCTE, placaBuscada, debugExtra) {
     };
 }
 
-async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
-    const context = typeof browser.createBrowserContext === 'function'
-        ? await browser.createBrowserContext()
-        : null;
-    const page = context ? await context.newPage() : await browser.newPage();
-    const urlsPostVistas = [];
+async function cerrarSesionTomcatLimpia(page, sesionIniciada) {
+    if (!sesionIniciada || page.isClosed()) return;
 
     try {
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        });
+        // Cierra explícitamente tanto el contexto del iframe como el portal contenedor para no dejar sesiones huérfanas
+        await page.goto('https://servicios.axiscloud.ec/AutoServicioConsultaInfracciones/salir.jsp', {
+            waitUntil: 'domcontentloaded',
+            timeout: 4000
+        }).catch(() => {});
+
+        await page.goto('https://servicios.axiscloud.ec/AutoServicio/salir.jsp', {
+            waitUntil: 'domcontentloaded',
+            timeout: 5000
+        }).catch(() => {});
+
+        const client = await page.target().createCDPSession().catch(() => null);
+        if (client) {
+            await client.send('Network.clearBrowserCookies').catch(() => {});
+            await client.detach().catch(() => {});
+        }
+    } catch (e) {}
+}
+
+async function consultarMultasCTE(browser, placaBuscada) {
+    // Elimina el antiguo archivo de cookies incompletas que provocaba fugas de sesión entre /AutoServicio y /AutoServicioConsultaInfracciones
+    limpiarCookiesLegacy();
+
+    const segundosRestantes = verificarCooldownActivo();
+    if (segundosRestantes !== null) {
+        return {
+            ok: false,
+            fuente: 'CTE',
+            placa: placaBuscada,
+            tiene_multas: false,
+            cantidad: 0,
+            total: 0,
+            listado: [],
+            requiere_revision_manual: true,
+            error: `El portal CTE alcanzó temporalmente su límite de sesiones activas. Espere ~${segundosRestantes}s para que expiren las sesiones previas o verifique manualmente.`
+        };
+    }
+
+    const lockObtenido = await adquirirLockLocal();
+    const page = await browser.newPage();
+    const urlsPostVistas = [];
+    let sesionIniciada = false;
+
+    try {
         await page.setExtraHTTPHeaders({
             'Accept-Language': 'es-EC,es;q=0.9,en;q=0.8'
         });
-        const uaNativo = (await browser.userAgent()).replace(/HeadlessChrome/g, 'Chrome');
-        await page.setUserAgent(uaNativo);
         await page.setViewport({ width: 1366, height: 768 });
 
         let resuelto = false;
         let resolvePromesa;
+        let timerTimeout;
         const promesaJson = new Promise((resolve) => {
             resolvePromesa = resolve;
-            setTimeout(() => {
+            timerTimeout = setTimeout(() => {
                 if (!resuelto) {
                     resuelto = true;
-                    resolve({ error_script: 'Timeout CTE AxisCloud' });
+                    resolve({ error_script: 'Tiempo de espera agotado en CTE AxisCloud (verificación manual requerida)' });
                 }
             }, 25000);
         });
@@ -148,30 +264,30 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
                     const trimmed = txt ? txt.trim() : '';
                     if (trimmed && !resuelto && (trimmed.includes('lsTotales') || trimmed.includes('lsError'))) {
                         resuelto = true;
+                        clearTimeout(timerTimeout);
                         resolvePromesa(JSON.parse(trimmed));
                     }
                 } catch (e) {}
             }
         });
 
-        // 1. Entramos por inicio.jsp (que sí renderiza el formulario y autoriza el iframe) con sesión 100% limpia
         await page.goto('https://servicios.axiscloud.ec/AutoServicio/inicio.jsp?ps_empresa=16&ps_accion=P55', {
             waitUntil: 'networkidle2',
             timeout: 30000
         });
+        sesionIniciada = true;
 
-        // 2. Localizamos el iframe ConsultaInfracciones.jsp
         let frameConsulta = page.frames().find(f => f.url().includes('ConsultaInfracciones.jsp'));
         if (!frameConsulta) {
             for (let i = 0; i < 15; i++) {
-                await new Promise(r => setTimeout(r, 300));
+                await esperar(300);
                 frameConsulta = page.frames().find(f => f.url().includes('ConsultaInfracciones.jsp'));
                 if (frameConsulta) break;
             }
         }
 
         if (!frameConsulta) {
-            return procesarRespuestaCTE({ error_script: 'No se encontró el iframe ConsultaInfracciones.jsp' }, placaBuscada, {
+            return procesarRespuestaCTE({ error_script: 'No se encontró el formulario ConsultaInfracciones.jsp' }, placaBuscada, {
                 frames: page.frames().map(f => f.url())
             });
         }
@@ -181,9 +297,9 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
         await frameConsulta.waitForSelector('#boton_buscar', { timeout: 10000 });
 
         await frameConsulta.select('#filtro_busqueda', 'PLA');
-        await new Promise(r => setTimeout(r, 400));
+        await esperar(250);
         await frameConsulta.click('#valor_busqueda', { clickCount: 3 });
-        await frameConsulta.type('#valor_busqueda', placaBuscada, { delay: 35 });
+        await frameConsulta.type('#valor_busqueda', placaBuscada, { delay: 30 });
 
         const valorActual = await frameConsulta.$eval('#valor_busqueda', el => el.value).catch(() => '');
         if (valorActual.trim().toUpperCase() !== placaBuscada) {
@@ -194,11 +310,17 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
             }, placaBuscada);
         }
 
-        await new Promise(r => setTimeout(r, 200));
+        await esperar(300);
         await frameConsulta.click('#boton_buscar');
 
         const rawJson = await promesaJson;
-        return procesarRespuestaCTE(rawJson, placaBuscada, { posts: urlsPostVistas });
+        const resultado = procesarRespuestaCTE(rawJson, placaBuscada, { posts: urlsPostVistas });
+
+        if (!resultado.ok && /sesiones permitidas/i.test(String(resultado.error || ''))) {
+            registrarCooldownLimiteSesiones();
+        }
+
+        return resultado;
     } catch (e) {
         return {
             ok: false,
@@ -208,23 +330,17 @@ async function ejecutarConsultaCTEUnIntento(browser, placaBuscada) {
             cantidad: 0,
             total: 0,
             listado: [],
+            requiere_revision_manual: true,
             error: e.message
         };
     } finally {
+        // Cierra siempre la sesión activa (tanto si la consulta tuvo éxito como si falló) antes de cerrar la pestaña
+        await cerrarSesionTomcatLimpia(page, sesionIniciada);
         await page.close().catch(() => {});
-        if (context) await context.close().catch(() => {});
+        if (lockObtenido) {
+            liberarLockLocal();
+        }
     }
-}
-
-async function consultarMultasCTE(browser, placaBuscada) {
-    let resultado = await ejecutarConsultaCTEUnIntento(browser, placaBuscada);
-
-    if (!resultado.ok && /ERR_NAME_NOT_RESOLVED|ERR_NETWORK_CHANGED|ERR_CONNECTION_RESET/i.test(String(resultado.error || ''))) {
-        await new Promise(r => setTimeout(r, 2000));
-        resultado = await ejecutarConsultaCTEUnIntento(browser, placaBuscada);
-    }
-
-    return resultado;
 }
 
 if (require.main === module) {
@@ -233,7 +349,7 @@ if (require.main === module) {
         try {
             const opciones = {
                 headless: 'new',
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-blink-features=AutomationControlled']
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
             };
             const exe = obtenerRutaNavegadorWindows();
             if (exe) opciones.executablePath = exe;

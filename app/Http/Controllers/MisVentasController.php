@@ -18,6 +18,7 @@ use App\Models\Transacciones_caja as TransaccionCaja;
 use App\Models\User;
 use App\Models\vehiculo as Vehiculo;
 use App\Models\Venta;
+use App\Services\ConstanciaVentaGeneratorService;
 use App\Services\PagareGeneratorService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -31,7 +32,6 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
-use PhpOffice\PhpWord\TemplateProcessor;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
@@ -40,6 +40,7 @@ class MisVentasController extends Controller
 {
     public function __construct(
         private readonly PagareGeneratorService $pagareGeneratorService,
+        private readonly ConstanciaVentaGeneratorService $constanciaVentaGeneratorService,
     ) {}
     /**
      * Por ahora habilitado cuando el estado actual es 'En Inventario'.
@@ -236,6 +237,9 @@ class MisVentasController extends Controller
             'vehiculo.transmision',
             'vehiculo.patio',
             'vehiculo.estado',
+            'vehiculo.tipoContrato',
+            'vehiculo.documentos.tipoContrato',
+            'vehiculo.clienteVendedor.tipoCliente',
             'vehiculo.imagenPrincipal',
             'cliente',
             'user:id,name',
@@ -246,7 +250,7 @@ class MisVentasController extends Controller
 
         if ($esquemaCreditoNormalizado) {
             $relaciones[] = 'credito.tasaInteres';
-            $relaciones[] = 'credito.cuotas';
+            $relaciones[] = 'credito.cuotas.pagos';
             $relaciones[] = 'credito.pagos.usuario:id,name';
             $relaciones[] = 'credito.pagos.cuota:id_cuota_credito,numero_cuota';
             $relaciones[] = 'credito.pagos.transaccionCaja:id_transaccion,monto,fecha_transaccion';
@@ -263,19 +267,23 @@ class MisVentasController extends Controller
             $this->sincronizarEstadosMoraCredito($venta->credito);
             $venta->credito->refresh()->load([
                 'tasaInteres',
-                'cuotas',
+                'cuotas.pagos',
                 'pagos.usuario:id,name',
                 'pagos.cuota:id_cuota_credito,numero_cuota',
                 'pagos.transaccionCaja:id_transaccion,monto,fecha_transaccion',
             ]);
             $creditoModel = $venta->credito;
-            $tienePagare = is_string($creditoModel->ruta_pagare)
+            $modalidadPlan = (string) ($creditoModel->modalidad ?? ($venta->forma_pago === 'credito' ? 'credito' : ($venta->forma_pago ?? 'credito')));
+            $esModalidadCredito = $modalidadPlan === 'credito' && $venta->forma_pago === 'credito';
+            $tienePagare = $esModalidadCredito
+                && is_string($creditoModel->ruta_pagare)
                 && $creditoModel->ruta_pagare !== ''
                 && Storage::disk('local')->exists($creditoModel->ruta_pagare);
 
             $creditoPayload = [
                 'id_credito' => $creditoModel->id_credito,
                 'id_cliente' => $creditoModel->id_cliente,
+                'modalidad' => $modalidadPlan,
                 'id_tasa_interes' => $creditoModel->id_tasa_interes,
                 'tasa_interes_nombre' => $creditoModel->tasaInteres?->nombre,
                 'tasa_anual' => $creditoModel->tasaInteres !== null ? (float) $creditoModel->tasaInteres->tasa_anual : null,
@@ -300,19 +308,27 @@ class MisVentasController extends Controller
                 'estado' => $creditoModel->estado,
                 'observaciones' => $creditoModel->observaciones,
                 'pagare_url' => $tienePagare ? route('mis-ventas.credito.pagare', $venta->id_venta) : null,
-                'cuotas' => $creditoModel->cuotas->map(static fn (CuotaCredito $c): array => [
-                    'id_cuota_credito' => $c->id_cuota_credito,
-                    'numero_cuota' => $c->numero_cuota,
-                    'fecha_vencimiento' => $c->fecha_vencimiento?->format('Y-m-d'),
-                    'monto_capital' => (float) $c->monto_capital,
-                    'monto_interes' => (float) $c->monto_interes,
-                    'monto_mora' => (float) $c->monto_mora,
-                    'valor_cuota' => (float) $c->valor_cuota,
-                    'monto_pagado' => (float) $c->monto_pagado,
-                    'saldo_cuota' => max(0.0, round(((float) $c->valor_cuota + (float) $c->monto_mora) - (float) $c->monto_pagado, 2)),
-                    'fecha_pago_real' => $c->fecha_pago_real?->format('Y-m-d'),
-                    'estado' => $c->estado,
-                ])->values(),
+                'cuotas' => $creditoModel->cuotas->map(static function (CuotaCredito $c) use ($venta): array {
+                    $primerPago = $c->pagos->first();
+
+                    return [
+                        'id_cuota_credito' => $c->id_cuota_credito,
+                        'numero_cuota' => $c->numero_cuota,
+                        'fecha_vencimiento' => $c->fecha_vencimiento?->format('Y-m-d'),
+                        'monto_capital' => (float) $c->monto_capital,
+                        'monto_interes' => (float) $c->monto_interes,
+                        'monto_mora' => (float) $c->monto_mora,
+                        'valor_cuota' => (float) $c->valor_cuota,
+                        'monto_pagado' => (float) $c->monto_pagado,
+                        'saldo_cuota' => max(0.0, round(((float) $c->valor_cuota + (float) $c->monto_mora) - (float) $c->monto_pagado, 2)),
+                        'fecha_pago_real' => $c->fecha_pago_real?->format('Y-m-d'),
+                        'estado' => $c->estado,
+                        'id_transaccion_caja' => $primerPago?->id_transaccion_caja,
+                        'comprobante_url' => $primerPago?->ruta_comprobante
+                            ? route('mis-ventas.credito.pagos.comprobante', [$venta->id_venta, $primerPago->id_pago_credito])
+                            : null,
+                    ];
+                })->values(),
                 'pagos' => $creditoModel->pagos->map(static fn (PagoCredito $p): array => [
                     'id_pago_credito' => $p->id_pago_credito,
                     'id_cuota_credito' => $p->id_cuota_credito,
@@ -351,14 +367,23 @@ class MisVentasController extends Controller
                 ])
             : collect();
 
+        $estrategiaConstancia = $this->constanciaVentaGeneratorService->resolverEstrategia($venta);
+        $vendedorAnterior = $this->constanciaVentaGeneratorService->resolverDatosClienteVendedor($venta);
+
         return Inertia::render('MisVentas/Show', [
             'tasasInteres' => $tasasInteres,
             'venta' => [
                 'id_venta' => $venta->id_venta,
                 'id_cliente' => $venta->id_cliente,
                 'cliente_nombre' => $venta->cliente
-                    ? trim("{$venta->cliente->nombre} {$venta->cliente->apellido}")
+                    ? $venta->cliente->nombre_completo
                     : ($venta->datos_cedula_comprador['nombre_completo'] ?? null),
+                'cliente_cedula' => $venta->cliente?->cedula ?? ($venta->datos_cedula_comprador['cedula'] ?? null),
+                'cliente_correo' => $venta->cliente?->correo ?? ($venta->datos_cedula_comprador['correo'] ?? null),
+                'cliente_direccion' => $venta->cliente?->direccion ?? ($venta->datos_cedula_comprador['direccion'] ?? null),
+                'cliente_telefono' => $venta->cliente?->telefono ?? ($venta->datos_cedula_comprador['telefono'] ?? null),
+                'vendedor_anterior' => $vendedorAnterior,
+                'constancia_estrategia' => $estrategiaConstancia,
                 'placa' => $venta->id_vehiculo,
                 'tipo_operacion' => $venta->tipo_operacion ?? 'venta',
                 'estado' => $venta->estado,
@@ -402,6 +427,8 @@ class MisVentasController extends Controller
                     'transmision' => $vehiculo?->transmision?->nombre,
                     'patio' => $vehiculo?->patio?->nombre ?? 'Sin asignar',
                     'estado' => $vehiculo?->estado?->nombre ?? 'En proceso',
+                    'id_tipo_contrato' => $vehiculo?->id_tipo_contrato ?? $vehiculo?->documentos?->id_tipo_contrato,
+                    'tipo_contrato_nombre' => $estrategiaConstancia['tipo_contrato_nombre'],
                     'chasis' => $vehiculo?->chasis ?? '',
                     'motor' => $vehiculo?->motor ?? '',
                     'imagen_url' => $vehiculo?->imagenPrincipal
@@ -629,8 +656,17 @@ class MisVentasController extends Controller
             $reglas['cuotas.*.monto'] = ['required', 'numeric', 'gt:0'];
             $reglas['cuotas.*.fecha_pago'] = ['nullable', 'date'];
         } else {
-            $reglas['documento_comprobante'] = ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'];
-            $reglas['fecha_pago'] = ['nullable', 'date'];
+            if ($request->has('pagos_contado')) {
+                $reglas['pagos_contado'] = ['required', 'array', 'min:1', 'max:20'];
+                $reglas['pagos_contado.*.comprobante'] = ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'];
+                $reglas['pagos_contado.*.monto'] = ['required', 'numeric', 'gt:0'];
+                $reglas['pagos_contado.*.fecha_pago'] = ['nullable', 'date'];
+                $reglas['pagos_contado.*.metodo_pago'] = ['nullable', Rule::in(['efectivo', 'transferencia', 'cheque', 'deposito'])];
+                $reglas['pagos_contado.*.numero_referencia'] = ['nullable', 'string', 'max:100'];
+            } else {
+                $reglas['documento_comprobante'] = ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'];
+                $reglas['fecha_pago'] = ['nullable', 'date'];
+            }
         }
 
         $validated = $request->validate($reglas, [
@@ -813,20 +849,58 @@ class MisVentasController extends Controller
                 ];
             }
         } elseif ($formaPago === 'contado') {
-            $archivoContado = $request->file('documento_comprobante');
-            $ruta = $archivoContado?->store("ventas/{$venta->id_venta}/pagos", 'local');
-            if (! is_string($ruta)) {
-                throw ValidationException::withMessages([
-                    'documento_comprobante' => 'No se pudo almacenar el comprobante de pago en el disco privado.',
-                ]);
+            if (isset($validated['pagos_contado']) && is_array($validated['pagos_contado'])) {
+                $sumaContado = 0.0;
+                foreach ($validated['pagos_contado'] as $item) {
+                    $sumaContado = round($sumaContado + round((float) $item['monto'], 2), 2);
+                }
+
+                if ($precioObjetivo > 0 && $sumaContado > $precioObjetivo + 0.009) {
+                    throw ValidationException::withMessages([
+                        'pagos_contado' => sprintf(
+                            'La suma de los comprobantes de contado ($%s) no puede superar el precio acordado ($%s).',
+                            number_format($sumaContado, 2, '.', ','),
+                            number_format($precioObjetivo, 2, '.', ','),
+                        ),
+                    ]);
+                }
+
+                foreach ($request->file('pagos_contado', []) as $idx => $archivosItem) {
+                    $archivoContado = $archivosItem['comprobante'] ?? null;
+                    $ruta = $archivoContado?->store("ventas/{$venta->id_venta}/pagos", 'local');
+                    if (! is_string($ruta)) {
+                        Storage::disk('local')->delete($rutasSubidas);
+                        throw ValidationException::withMessages([
+                            'pagos_contado' => 'No se pudo almacenar uno de los comprobantes de contado en el disco privado.',
+                        ]);
+                    }
+                    $rutasSubidas[] = $ruta;
+                    $pagosPreparados[] = [
+                        'ruta_comprobante' => $ruta,
+                        'monto' => round((float) $validated['pagos_contado'][$idx]['monto'], 2),
+                        'tipo_pago' => 'contado',
+                        'metodo_caja' => $validated['pagos_contado'][$idx]['metodo_pago'] ?? 'transferencia',
+                        'numero_referencia' => trim((string) ($validated['pagos_contado'][$idx]['numero_referencia'] ?? '')) ?: null,
+                        'fecha_pago' => $validated['pagos_contado'][$idx]['fecha_pago'] ?? now()->toDateString(),
+                    ];
+                }
+            } else {
+                $archivoContado = $request->file('documento_comprobante');
+                $ruta = $archivoContado?->store("ventas/{$venta->id_venta}/pagos", 'local');
+                if (! is_string($ruta)) {
+                    throw ValidationException::withMessages([
+                        'documento_comprobante' => 'No se pudo almacenar el comprobante de pago en el disco privado.',
+                    ]);
+                }
+                $rutasSubidas[] = $ruta;
+                $pagosPreparados[] = [
+                    'ruta_comprobante' => $ruta,
+                    'monto' => $precioObjetivo,
+                    'tipo_pago' => 'contado',
+                    'metodo_caja' => 'contado',
+                    'fecha_pago' => $validated['fecha_pago'] ?? now()->toDateString(),
+                ];
             }
-            $rutasSubidas[] = $ruta;
-            $pagosPreparados[] = [
-                'ruta_comprobante' => $ruta,
-                'monto' => $precioObjetivo,
-                'tipo_pago' => 'contado',
-                'fecha_pago' => $validated['fecha_pago'] ?? now()->toDateString(),
-            ];
         }
 
         try {
@@ -853,6 +927,8 @@ class MisVentasController extends Controller
 
                 $tipoTransaccionIngreso = TipoTransaccion::firstOrCreate(['nombre' => 'Ingreso por Venta de Vehículo']);
 
+                $pagosConCaja = [];
+
                 foreach ($pagosPreparados as $pagoData) {
                     PagoVenta::create([
                         'id_venta' => $ventaBloqueada->id_venta,
@@ -864,11 +940,12 @@ class MisVentasController extends Controller
                         'registrado_por' => $request->user()->id,
                     ]);
 
+                    $transaccionCaja = null;
                     if ($ventaBloqueada->id_cliente !== null || Schema::hasTable('transacciones_cajas')) {
                         $metodoCaja = MetodoPago::firstOrCreate([
                             'nombre' => ucfirst((string) ($pagoData['metodo_caja'] ?? $formaPago)),
                         ]);
-                        $this->registrarMovimientoCajaSeguro(
+                        $transaccionCaja = $this->registrarMovimientoCajaSeguro(
                             $ventaBloqueada,
                             $tipoTransaccionIngreso->id_tipo_transaccion,
                             $metodoCaja->id_metodo_pago,
@@ -879,6 +956,11 @@ class MisVentasController extends Controller
                             $request->user()->id,
                         );
                     }
+
+                    $pagosConCaja[] = [
+                        ...$pagoData,
+                        'id_transaccion_caja' => $transaccionCaja?->id_transaccion,
+                    ];
                 }
 
                 $requiereAprobacionCredito = (bool) $datosCredito['requiere_aprobacion_credito'];
@@ -919,6 +1001,20 @@ class MisVentasController extends Controller
                     if ($rutaPagareGenerado !== null) {
                         $rutasSubidas[] = $rutaPagareGenerado;
                     }
+                } elseif (
+                    in_array($formaPago, ['contado', 'cuotas'], true)
+                    && $pagosConCaja !== []
+                    && Schema::hasTable('cuotas_credito')
+                    && Schema::hasTable('pagos_credito')
+                    && Schema::hasColumn('creditos', 'id_venta')
+                ) {
+                    $this->persistirPagosContadoEnCuotasCredito(
+                        $ventaBloqueada,
+                        $formaPago,
+                        $pagosConCaja,
+                        $precioObjetivo,
+                        $request->user()->id,
+                    );
                 }
 
                 $etiquetaModalidadCredito = $datosCredito['modalidad_credito'] === 'mayor_6_meses'
@@ -1111,15 +1207,51 @@ class MisVentasController extends Controller
                     ]);
                 }
 
+                $fechaPago = $validated['fecha_pago'] ?? now()->toDateString();
+
                 PagoVenta::create([
                     'id_venta' => $ventaBloqueada->id_venta,
                     'id_vehiculo' => $ventaBloqueada->id_vehiculo,
                     'ruta_comprobante' => $ruta,
                     'monto' => $montoAbono,
-                    'tipo_pago' => 'cuota',
-                    'fecha_pago' => $validated['fecha_pago'] ?? now()->toDateString(),
+                    'tipo_pago' => $ventaBloqueada->forma_pago === 'contado' ? 'contado' : 'cuota',
+                    'fecha_pago' => $fechaPago,
                     'registrado_por' => $request->user()->id,
                 ]);
+
+                $transaccionCaja = null;
+                if (Schema::hasTable('transacciones_cajas')) {
+                    $tipoTransaccionIngreso = TipoTransaccion::firstOrCreate(['nombre' => 'Ingreso por Venta de Vehículo']);
+                    $metodoCaja = MetodoPago::firstOrCreate([
+                        'nombre' => ucfirst((string) ($ventaBloqueada->forma_pago ?? 'Contado')),
+                    ]);
+                    $transaccionCaja = $this->registrarMovimientoCajaSeguro(
+                        $ventaBloqueada,
+                        $tipoTransaccionIngreso->id_tipo_transaccion,
+                        $metodoCaja->id_metodo_pago,
+                        $montoAbono,
+                        $fechaPago,
+                        "Abono adicional de venta #{$ventaBloqueada->id_venta} · Placa {$ventaBloqueada->id_vehiculo}",
+                        $ruta,
+                        $request->user()->id,
+                    );
+                }
+
+                if (
+                    Schema::hasTable('cuotas_credito')
+                    && Schema::hasTable('pagos_credito')
+                    && Schema::hasColumn('creditos', 'id_venta')
+                ) {
+                    $this->agregarAbonoContadoEnCuotasCredito(
+                        $ventaBloqueada,
+                        $montoAbono,
+                        $fechaPago,
+                        $ruta,
+                        $transaccionCaja?->id_transaccion,
+                        $precioObjetivo,
+                        $request->user()->id,
+                    );
+                }
             });
         } catch (Throwable $exception) {
             Storage::disk('local')->delete($ruta);
@@ -1293,7 +1425,6 @@ class MisVentasController extends Controller
         if (Schema::hasColumn('creditos', 'id_venta')) {
             $creditoAsociado = Credito::query()
                 ->where('id_venta', $venta->id_venta)
-                ->whereIn('estado', ['pendiente_aprobacion_credito', 'activo', 'en_mora'])
                 ->latest('id_credito')
                 ->first();
 
@@ -1302,9 +1433,15 @@ class MisVentasController extends Controller
                     $creditoAsociado->update(['id_cliente' => $cliente->id_cliente]);
                 }
 
-                $rutaPagare = $this->pagareGeneratorService->regenerarYGuardar($creditoAsociado->fresh());
-                if ($rutaPagare !== null) {
-                    $pagareUrl = route('mis-ventas.credito.pagare', $venta->id_venta);
+                $esCreditoFinanciado = $venta->forma_pago === 'credito'
+                    && ($creditoAsociado->modalidad ?? 'credito') === 'credito'
+                    && in_array($creditoAsociado->estado, ['pendiente_aprobacion_credito', 'activo', 'en_mora'], true);
+
+                if ($esCreditoFinanciado) {
+                    $rutaPagare = $this->pagareGeneratorService->regenerarYGuardar($creditoAsociado->fresh());
+                    if ($rutaPagare !== null) {
+                        $pagareUrl = route('mis-ventas.credito.pagare', $venta->id_venta);
+                    }
                 }
             }
         }
@@ -1321,6 +1458,81 @@ class MisVentasController extends Controller
         ]);
     }
 
+    public function actualizarDatosComprador(Request $request, Venta $venta): JsonResponse
+    {
+        abort_unless($this->puedeAccederVenta($request->user(), $venta), 403);
+
+        $validated = $request->validate([
+            'nombre_completo' => ['required', 'string', 'max:200'],
+            'cedula' => ['required', 'string', 'max:30'],
+            'direccion' => ['nullable', 'string', 'max:200'],
+            'correo' => ['nullable', 'email', 'max:120'],
+            'telefono' => ['nullable', 'string', 'max:30'],
+            'estado_civil' => ['nullable', 'string', 'max:60'],
+            'es_casado' => ['nullable', 'boolean'],
+            'nombre_conyuge' => ['nullable', 'string', 'max:200'],
+            'cedula_conyuge' => ['nullable', 'string', 'max:30'],
+        ]);
+
+        $previos = is_array($venta->datos_cedula_comprador) ? $venta->datos_cedula_comprador : [];
+        $esCasado = array_key_exists('es_casado', $validated)
+            ? (bool) $validated['es_casado']
+            : (bool) ($previos['es_casado'] ?? false);
+
+        $datosActualizados = [
+            'nombre_completo' => mb_strtoupper(trim($validated['nombre_completo']), 'UTF-8'),
+            'cedula' => trim($validated['cedula']),
+            'direccion' => trim((string) ($validated['direccion'] ?? ($previos['direccion'] ?? ''))),
+            'correo' => trim((string) ($validated['correo'] ?? ($previos['correo'] ?? ''))),
+            'telefono' => trim((string) ($validated['telefono'] ?? ($previos['telefono'] ?? ''))),
+            'estado_civil' => mb_strtoupper(trim((string) ($validated['estado_civil'] ?? ($previos['estado_civil'] ?? ''))), 'UTF-8'),
+            'es_casado' => $esCasado,
+            'nombre_conyuge' => $esCasado
+                ? mb_strtoupper(trim((string) ($validated['nombre_conyuge'] ?? ($previos['nombre_conyuge'] ?? ''))), 'UTF-8')
+                : '',
+            'cedula_conyuge' => $esCasado
+                ? trim((string) ($validated['cedula_conyuge'] ?? ($previos['cedula_conyuge'] ?? '')))
+                : '',
+        ];
+
+        $cliente = $this->sincronizarClienteComprador($venta, $datosActualizados);
+        $venta->update([
+            'id_cliente' => $cliente?->id_cliente ?? $venta->id_cliente,
+            'datos_cedula_comprador' => $datosActualizados,
+        ]);
+
+        $pagareUrl = null;
+        if (Schema::hasColumn('creditos', 'id_venta')) {
+            $creditoAsociado = Credito::query()
+                ->where('id_venta', $venta->id_venta)
+                ->latest('id_credito')
+                ->first();
+
+            if ($creditoAsociado !== null) {
+                if ($cliente !== null && $creditoAsociado->id_cliente !== $cliente->id_cliente) {
+                    $creditoAsociado->update(['id_cliente' => $cliente->id_cliente]);
+                }
+
+                $esCreditoFinanciado = $venta->forma_pago === 'credito'
+                    && ($creditoAsociado->modalidad ?? 'credito') === 'credito'
+                    && in_array($creditoAsociado->estado, ['pendiente_aprobacion_credito', 'activo', 'en_mora'], true);
+
+                if ($esCreditoFinanciado) {
+                    $rutaPagare = $this->pagareGeneratorService->regenerarYGuardar($creditoAsociado->fresh());
+                    if ($rutaPagare !== null) {
+                        $pagareUrl = route('mis-ventas.credito.pagare', $venta->id_venta);
+                    }
+                }
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'datos_cedula_comprador' => $datosActualizados,
+            'pagare_url' => $pagareUrl,
+        ]);
+    }
+
     public function generarConstancia(Request $request, Venta $venta): JsonResponse
     {
         abort_unless($this->puedeAccederVenta($request->user(), $venta), 403);
@@ -1332,45 +1544,90 @@ class MisVentasController extends Controller
             ]);
         }
 
-        $validated = $request->validate([
-            'nombre_completo' => ['required', 'string', 'max:200'],
-            'cedula' => ['required', 'string', 'max:30'],
-            'direccion' => ['nullable', 'string', 'max:200'],
-            'correo' => ['nullable', 'email', 'max:120'],
-            'telefono' => ['nullable', 'string', 'max:30'],
-            'estado_civil' => ['nullable', 'string', 'max:60'],
-            'es_casado' => ['required', 'boolean'],
-            'nombre_conyuge' => ['nullable', 'string', 'max:200', 'required_if:es_casado,true'],
-            'cedula_conyuge' => ['nullable', 'string', 'max:30'],
+        $estrategia = $this->constanciaVentaGeneratorService->resolverEstrategia($venta);
+        $datosVendedorActuales = $this->constanciaVentaGeneratorService->resolverDatosClienteVendedor($venta, $request->all());
+
+        // Prellena valores ya almacenados en cliente / cédula escaneada si el frontend no los envió explícitamente
+        $datosPrevios = is_array($venta->datos_cedula_comprador) ? $venta->datos_cedula_comprador : [];
+        $venta->loadMissing('cliente');
+        $request->merge([
+            'nombre_completo' => $request->input('nombre_completo') ?: ($venta->cliente?->nombre_completo ?? $datosPrevios['nombre_completo'] ?? ''),
+            'cedula' => $request->input('cedula') ?: ($venta->cliente?->cedula ?? $datosPrevios['cedula'] ?? ''),
+            'direccion' => $request->input('direccion') ?: ($venta->cliente?->direccion ?? $datosPrevios['direccion'] ?? ''),
+            'telefono' => $request->input('telefono') ?: ($venta->cliente?->telefono ?? $datosPrevios['telefono'] ?? ''),
+            'correo' => $request->input('correo') ?: ($venta->cliente?->correo ?? $datosPrevios['correo'] ?? ''),
+            'es_casado' => $request->has('es_casado') ? $request->boolean('es_casado') : (bool) ($datosPrevios['es_casado'] ?? false),
+            'nombre_cliente_vendedor' => $datosVendedorActuales['nombre_completo'],
+            'cedula_cliente_vendedor' => $datosVendedorActuales['cedula'],
         ]);
 
-        $plantilla = storage_path(self::PLANTILLA_CONSTANCIA_VENTA);
-        if (! is_file($plantilla)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No se encontró la plantilla Word en storage/'.self::PLANTILLA_CONSTANCIA_VENTA,
-            ], 500);
-        }
+        $reglas = [
+            'nombre_completo' => ['required', 'string', 'max:200'],
+            'cedula' => ['required', 'string', 'max:30'],
+            'direccion' => ['required', 'string', 'max:200'],
+            'telefono' => ['required', 'string', 'max:30'],
+            'correo' => ['required', 'email', 'max:120'],
+            'estado_civil' => ['nullable', 'string', 'max:60'],
+            'es_casado' => ['required', 'boolean'],
+            'nombre_conyuge' => ['nullable', 'string', 'max:200'],
+            'cedula_conyuge' => ['nullable', 'string', 'max:30'],
+            'nombre_cliente_vendedor' => $estrategia['requiere_cliente_vendedor']
+                ? ['required', 'string', 'max:200']
+                : ['nullable', 'string', 'max:200'],
+            'cedula_cliente_vendedor' => $estrategia['requiere_cliente_vendedor']
+                ? ['required', 'string', 'max:30']
+                : ['nullable', 'string', 'max:30'],
+        ];
 
-        $venta->load(['vehiculo.marca', 'vehiculo.color']);
+        $validated = $request->validate($reglas, [
+            'direccion.required' => 'Ingresa la dirección domiciliaria del comprador para emitir la constancia.',
+            'telefono.required' => 'Ingresa el teléfono del comprador para emitir la constancia.',
+            'correo.required' => 'Ingresa el correo electrónico del comprador para emitir la constancia.',
+            'nombre_cliente_vendedor.required' => 'Este modelo PODER requiere el nombre completo del propietario anterior que entregó el vehículo.',
+            'cedula_cliente_vendedor.required' => 'Este modelo PODER requiere la cédula/RUC del propietario anterior que entregó el vehículo.',
+        ]);
+
         $datosCedulaActualizados = [
             'nombre_completo' => mb_strtoupper(trim($validated['nombre_completo']), 'UTF-8'),
             'cedula' => trim($validated['cedula']),
-            'direccion' => trim((string) ($validated['direccion'] ?? '')),
-            'correo' => trim((string) ($validated['correo'] ?? '')),
-            'telefono' => trim((string) ($validated['telefono'] ?? '')),
-            'estado_civil' => mb_strtoupper(trim((string) ($validated['estado_civil'] ?? '')), 'UTF-8'),
+            'direccion' => trim((string) $validated['direccion']),
+            'correo' => trim((string) $validated['correo']),
+            'telefono' => trim((string) $validated['telefono']),
+            'estado_civil' => mb_strtoupper(trim((string) ($validated['estado_civil'] ?? ($datosPrevios['estado_civil'] ?? ''))), 'UTF-8'),
             'es_casado' => (bool) $validated['es_casado'],
             'nombre_conyuge' => $validated['es_casado']
-                ? mb_strtoupper(trim((string) ($validated['nombre_conyuge'] ?? '')), 'UTF-8')
+                ? mb_strtoupper(trim((string) ($validated['nombre_conyuge'] ?? ($datosPrevios['nombre_conyuge'] ?? ''))), 'UTF-8')
                 : '',
             'cedula_conyuge' => $validated['es_casado']
-                ? trim((string) ($validated['cedula_conyuge'] ?? ''))
+                ? trim((string) ($validated['cedula_conyuge'] ?? ($datosPrevios['cedula_conyuge'] ?? '')))
                 : '',
         ];
 
+        // Sincroniza comprador en clientes y enlaza a ventas
+        $cliente = $this->sincronizarClienteComprador($venta, $datosCedulaActualizados);
+
+        // Si es modelo PODER (o se enviaron datos del vendedor anterior), lo persiste en clientes y vincula al vehículo
+        $nombreVendedor = mb_strtoupper(trim((string) ($validated['nombre_cliente_vendedor'] ?? '')), 'UTF-8');
+        $cedulaVendedor = preg_replace('/[^0-9A-Za-z]/', '', trim((string) ($validated['cedula_cliente_vendedor'] ?? ''))) ?? '';
+        if ($nombreVendedor !== '' && $cedulaVendedor !== '' && $venta->vehiculo !== null) {
+            $clienteVendedor = Cliente::sincronizarConRol(
+                $cedulaVendedor,
+                ['nombre_completo' => $nombreVendedor],
+                \App\Models\TipoCliente::VENDEDOR,
+            );
+            if ($venta->vehiculo->id_cliente_vendedor !== $clienteVendedor->id_cliente) {
+                $venta->vehiculo->update(['id_cliente_vendedor' => $clienteVendedor->id_cliente]);
+            }
+        }
+
+        $payloadGenerador = [
+            ...$datosCedulaActualizados,
+            'nombre_cliente_vendedor' => $nombreVendedor,
+            'cedula_cliente_vendedor' => $cedulaVendedor,
+        ];
+
         try {
-            $rutaRelativa = $this->generarDocumentoWordVenta($venta, $plantilla, $datosCedulaActualizados);
+            $rutaRelativa = $this->constanciaVentaGeneratorService->generar($venta->fresh(), $payloadGenerador);
         } catch (Throwable $exception) {
             Log::error('Error al generar constancia Word en MisVentas.', [
                 'id_venta' => $venta->id_venta,
@@ -1384,7 +1641,6 @@ class MisVentasController extends Controller
         }
 
         $rutaAnterior = $venta->ruta_constancia_generada;
-        $cliente = $this->sincronizarClienteComprador($venta, $datosCedulaActualizados);
         $venta->update([
             'id_cliente' => $cliente?->id_cliente ?? $venta->id_cliente,
             'datos_cedula_comprador' => $datosCedulaActualizados,
@@ -1400,7 +1656,14 @@ class MisVentasController extends Controller
 
             if ($creditoAsociado !== null) {
                 $creditoAsociado->update(['id_cliente' => $cliente->id_cliente]);
-                $this->pagareGeneratorService->regenerarYGuardar($creditoAsociado->fresh());
+
+                $esCreditoFinanciado = $venta->forma_pago === 'credito'
+                    && ($creditoAsociado->modalidad ?? 'credito') === 'credito'
+                    && in_array($creditoAsociado->estado, ['pendiente_aprobacion_credito', 'activo', 'en_mora'], true);
+
+                if ($esCreditoFinanciado) {
+                    $this->pagareGeneratorService->regenerarYGuardar($creditoAsociado->fresh());
+                }
             }
         }
 
@@ -1940,7 +2203,7 @@ class MisVentasController extends Controller
             }
         }
 
-        $credito = Credito::create([
+        $datosCabeceraCredito = [
             'id_cliente' => $clienteId,
             'id_venta' => $venta->id_venta,
             'id_vehiculo' => $venta->id_vehiculo,
@@ -1957,12 +2220,18 @@ class MisVentasController extends Controller
             'fecha_vencimiento_final' => $fechaFinal,
             'estado' => 'pendiente_aprobacion_credito',
             'observaciones' => $observaciones,
-        ]);
+        ];
+        if (Schema::hasColumn('creditos', 'modalidad')) {
+            $datosCabeceraCredito['modalidad'] = 'credito';
+        }
+
+        $credito = Credito::create($datosCabeceraCredito);
 
         // Desglose normalizado de capital e interés para cuotas_credito
         $interesTotal = max(0.0, round($totalPlan - $montoFinanciado, 2));
         $capitalRestante = min($montoFinanciado, $totalPlan);
         $interesRestante = $interesTotal;
+        $tieneIdVentaEnCuotas = Schema::hasColumn('cuotas_credito', 'id_venta');
 
         foreach (array_values($planCuotas) as $idx => $item) {
             $esUltima = ($idx === $numeroCuotas - 1);
@@ -1985,7 +2254,7 @@ class MisVentasController extends Controller
                 $capitalRestante = round($capitalRestante - $montoCapital, 2);
             }
 
-            CuotaCredito::create([
+            $datosCuota = [
                 'id_credito' => $credito->id_credito,
                 'numero_cuota' => (int) ($item['numero'] ?? ($idx + 1)),
                 'fecha_vencimiento' => $item['fecha_vencimiento'],
@@ -1996,14 +2265,228 @@ class MisVentasController extends Controller
                 'monto_pagado' => 0.0,
                 'fecha_pago_real' => null,
                 'estado' => 'pendiente',
-            ]);
+            ];
+            if ($tieneIdVentaEnCuotas) {
+                $datosCuota['id_venta'] = $venta->id_venta;
+            }
+
+            CuotaCredito::create($datosCuota);
         }
 
         return $this->pagareGeneratorService->regenerarYGuardar($credito->fresh(['cuotas', 'tasaInteres', 'cliente', 'venta']));
     }
 
+    /**
+     * Unifica los pagos de ventas de contado o cuotas/abonos dentro de `creditos`, `cuotas_credito` y `pagos_credito`
+     * sin disparar aprobación de crédito ni generación de Pagaré.
+     *
+     * @param  list<array{ruta_comprobante: string, monto: float, tipo_pago: string, fecha_pago: string, metodo_caja?: string, id_transaccion_caja?: int|null}>  $pagosConCaja
+     */
+    private function persistirPagosContadoEnCuotasCredito(
+        Venta $venta,
+        string $modalidad,
+        array $pagosConCaja,
+        float $montoTotalVenta,
+        int $userId,
+    ): void {
+        $previos = Credito::query()->where('id_venta', $venta->id_venta)->get();
+        foreach ($previos as $previo) {
+            if (is_string($previo->ruta_pagare) && $previo->ruta_pagare !== '' && Storage::disk('local')->exists($previo->ruta_pagare)) {
+                Storage::disk('local')->delete($previo->ruta_pagare);
+            }
+            $previo->delete();
+        }
+
+        $totalPagado = round(array_reduce(
+            $pagosConCaja,
+            static fn (float $acc, array $item): float => $acc + (float) $item['monto'],
+            0.0,
+        ), 2);
+        $saldoPendiente = max(0.0, round($montoTotalVenta - $totalPagado, 2));
+
+        $fechas = array_column($pagosConCaja, 'fecha_pago');
+        sort($fechas);
+        $fechaInicio = $fechas[0] ?? now()->toDateString();
+        $fechaFinal = $fechas !== [] ? $fechas[count($fechas) - 1] : now()->toDateString();
+
+        $clienteId = $venta->id_cliente;
+        if ($clienteId === null && is_array($venta->datos_cedula_comprador)) {
+            $clienteSincronizado = $this->sincronizarClienteComprador($venta, $venta->datos_cedula_comprador);
+            if ($clienteSincronizado !== null) {
+                $clienteId = $clienteSincronizado->id_cliente;
+                $venta->update(['id_cliente' => $clienteId]);
+            }
+        }
+
+        $datosCabecera = [
+            'id_cliente' => $clienteId,
+            'id_venta' => $venta->id_venta,
+            'id_vehiculo' => $venta->id_vehiculo,
+            'id_tasa_interes' => null,
+            'user_id' => $userId,
+            'registrado_por' => $userId,
+            'monto_total' => $montoTotalVenta,
+            'monto_inicial' => $totalPagado,
+            'monto_financiado' => 0.0,
+            'saldo_pendiente' => $saldoPendiente,
+            'numero_cuotas' => count($pagosConCaja),
+            'fecha_inicio' => $fechaInicio,
+            'fecha_vencimiento' => $fechaFinal,
+            'fecha_vencimiento_final' => $fechaFinal,
+            'ruta_pagare' => null,
+            'estado' => $saldoPendiente <= 0.009 ? 'pagado' : 'activo',
+            'observaciones' => $modalidad === 'contado'
+                ? 'Registro unificado de pago de contado en cuotas_credito.'
+                : 'Registro unificado de pagos/abonos múltiples en cuotas_credito.',
+        ];
+        if (Schema::hasColumn('creditos', 'modalidad')) {
+            $datosCabecera['modalidad'] = $modalidad;
+        }
+
+        $cabecera = Credito::create($datosCabecera);
+        $tieneIdVentaEnCuotas = Schema::hasColumn('cuotas_credito', 'id_venta');
+
+        foreach (array_values($pagosConCaja) as $idx => $item) {
+            $monto = round((float) $item['monto'], 2);
+            $fechaPago = (string) ($item['fecha_pago'] ?? now()->toDateString());
+
+            $datosCuota = [
+                'id_credito' => $cabecera->id_credito,
+                'numero_cuota' => $idx + 1,
+                'fecha_vencimiento' => $fechaPago,
+                'monto_capital' => $monto,
+                'monto_interes' => 0.0,
+                'monto_mora' => 0.0,
+                'valor_cuota' => $monto,
+                'monto_pagado' => $monto,
+                'fecha_pago_real' => $fechaPago,
+                'estado' => 'pagada',
+            ];
+            if ($tieneIdVentaEnCuotas) {
+                $datosCuota['id_venta'] = $venta->id_venta;
+            }
+
+            $cuota = CuotaCredito::create($datosCuota);
+
+            PagoCredito::create([
+                'id_credito' => $cabecera->id_credito,
+                'id_cuota_credito' => $cuota->id_cuota_credito,
+                'id_transaccion_caja' => $item['id_transaccion_caja'] ?? null,
+                'user_id' => $userId,
+                'monto_pagado' => $monto,
+                'metodo_pago' => (string) ($item['metodo_caja'] ?? $modalidad),
+                'numero_referencia' => $item['numero_referencia'] ?? null,
+                'fecha_pago' => $fechaPago,
+                'ruta_comprobante' => $item['ruta_comprobante'],
+                'observaciones' => sprintf('Pago (%s) de venta #%d · Placa %s', $item['tipo_pago'], $venta->id_venta, $venta->id_vehiculo),
+            ]);
+        }
+    }
+
+    /**
+     * Registra un abono adicional de venta no financiada (contado/cuotas) dentro de `cuotas_credito` y `pagos_credito`.
+     */
+    private function agregarAbonoContadoEnCuotasCredito(
+        Venta $venta,
+        float $montoAbono,
+        string $fechaPago,
+        string $rutaComprobante,
+        ?int $idTransaccionCaja,
+        float $precioObjetivo,
+        int $userId,
+    ): void {
+        $cabecera = Credito::query()
+            ->where('id_venta', $venta->id_venta)
+            ->latest('id_credito')
+            ->lockForUpdate()
+            ->first();
+
+        $modalidad = in_array($venta->forma_pago, ['contado', 'cuotas'], true)
+            ? (string) $venta->forma_pago
+            : 'contado';
+
+        if ($cabecera === null) {
+            $datosCabecera = [
+                'id_cliente' => $venta->id_cliente,
+                'id_venta' => $venta->id_venta,
+                'id_vehiculo' => $venta->id_vehiculo,
+                'id_tasa_interes' => null,
+                'user_id' => $userId,
+                'registrado_por' => $userId,
+                'monto_total' => $precioObjetivo,
+                'monto_inicial' => 0.0,
+                'monto_financiado' => 0.0,
+                'saldo_pendiente' => $precioObjetivo,
+                'numero_cuotas' => 0,
+                'fecha_inicio' => $fechaPago,
+                'fecha_vencimiento' => $fechaPago,
+                'fecha_vencimiento_final' => $fechaPago,
+                'ruta_pagare' => null,
+                'estado' => 'activo',
+                'observaciones' => 'Registro unificado de pagos de contado/abonos.',
+            ];
+            if (Schema::hasColumn('creditos', 'modalidad')) {
+                $datosCabecera['modalidad'] = $modalidad;
+            }
+            $cabecera = Credito::create($datosCabecera);
+        }
+
+        $siguienteNumero = (int) CuotaCredito::query()
+            ->where('id_credito', $cabecera->id_credito)
+            ->max('numero_cuota') + 1;
+
+        $datosCuota = [
+            'id_credito' => $cabecera->id_credito,
+            'numero_cuota' => $siguienteNumero,
+            'fecha_vencimiento' => $fechaPago,
+            'monto_capital' => $montoAbono,
+            'monto_interes' => 0.0,
+            'monto_mora' => 0.0,
+            'valor_cuota' => $montoAbono,
+            'monto_pagado' => $montoAbono,
+            'fecha_pago_real' => $fechaPago,
+            'estado' => 'pagada',
+        ];
+        if (Schema::hasColumn('cuotas_credito', 'id_venta')) {
+            $datosCuota['id_venta'] = $venta->id_venta;
+        }
+
+        $cuota = CuotaCredito::create($datosCuota);
+
+        PagoCredito::create([
+            'id_credito' => $cabecera->id_credito,
+            'id_cuota_credito' => $cuota->id_cuota_credito,
+            'id_transaccion_caja' => $idTransaccionCaja,
+            'user_id' => $userId,
+            'monto_pagado' => $montoAbono,
+            'metodo_pago' => $modalidad,
+            'numero_referencia' => null,
+            'fecha_pago' => $fechaPago,
+            'ruta_comprobante' => $rutaComprobante,
+            'observaciones' => sprintf('Abono adicional venta #%d · Placa %s', $venta->id_venta, $venta->id_vehiculo),
+        ]);
+
+        $totalPagado = round((float) CuotaCredito::query()
+            ->where('id_credito', $cabecera->id_credito)
+            ->sum('monto_pagado'), 2);
+        $nuevoSaldo = max(0.0, round($precioObjetivo - $totalPagado, 2));
+
+        $cabecera->update([
+            'monto_inicial' => $totalPagado,
+            'saldo_pendiente' => $nuevoSaldo,
+            'numero_cuotas' => $siguienteNumero,
+            'fecha_vencimiento' => $fechaPago,
+            'fecha_vencimiento_final' => $fechaPago,
+            'estado' => $nuevoSaldo <= 0.009 ? 'pagado' : 'activo',
+        ]);
+    }
+
     private function sincronizarEstadosMoraCredito(Credito $credito): void
     {
+        if (($credito->modalidad ?? 'credito') !== 'credito') {
+            return;
+        }
+
         if (! in_array($credito->estado, ['activo', 'en_mora'], true)) {
             return;
         }
@@ -2080,9 +2563,17 @@ class MisVentasController extends Controller
         }
 
         try {
-            return Cliente::updateOrCreate(
-                ['cedula' => $cedula],
-                $atributos,
+            return Cliente::sincronizarConRol(
+                $cedula,
+                [
+                    'nombre' => $nombre,
+                    'apellido' => $apellido,
+                    'direccion' => $direccion,
+                    'correo' => $correo,
+                    'telefono' => $telefono,
+                    'ruta_cedula' => is_string($venta->ruta_cedula_comprador) ? $venta->ruta_cedula_comprador : '',
+                ],
+                \App\Models\TipoCliente::COMPRADOR,
             );
         } catch (Throwable $exception) {
             Log::warning('No se pudo sincronizar automáticamente el registro en clientes.', [

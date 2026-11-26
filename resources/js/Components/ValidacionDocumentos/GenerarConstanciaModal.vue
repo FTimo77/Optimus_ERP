@@ -31,11 +31,59 @@ const errorConstancia = ref('');
 const datosCedula = reactive({
     nombre_completo: props.validacion.datos_cedula_cliente?.nombre_completo || '',
     cedula: props.validacion.datos_cedula_cliente?.cedula || '',
+    telefono: props.validacion.datos_cedula_cliente?.telefono || '',
+    direccion: props.validacion.datos_cedula_cliente?.direccion || '',
     estado_civil: props.validacion.datos_cedula_cliente?.estado_civil || '',
     es_casado: Boolean(props.validacion.datos_cedula_cliente?.es_casado),
     nombre_conyuge: props.validacion.datos_cedula_cliente?.nombre_conyuge || '',
     cedula_conyuge: props.validacion.datos_cedula_cliente?.cedula_conyuge || '',
 });
+
+const buscandoCliente = ref(false);
+const mensajeCliente = ref('');
+const tipoClienteEncontrado = ref('');
+
+const buscarClientePorCedula = async () => {
+    const cedulaLimpia = String(datosCedula.cedula || '').replace(/[^0-9A-Za-z]/g, '').trim();
+    if (cedulaLimpia.length < 6) {
+        mensajeCliente.value = '';
+        tipoClienteEncontrado.value = '';
+        return;
+    }
+
+    buscandoCliente.value = true;
+    mensajeCliente.value = '';
+    tipoClienteEncontrado.value = '';
+
+    try {
+        const res = await axios.get(route('vehiculos.clientes.buscar'), {
+            params: { cedula: cedulaLimpia },
+        });
+        if (res.data?.found && res.data.cliente) {
+            const c = res.data.cliente;
+            datosCedula.cedula = c.cedula || cedulaLimpia;
+            if (!datosCedula.nombre_completo && c.nombre_completo) {
+                datosCedula.nombre_completo = c.nombre_completo;
+            }
+            if (!datosCedula.telefono && c.telefono) {
+                datosCedula.telefono = c.telefono;
+            }
+            if (!datosCedula.direccion && c.direccion) {
+                datosCedula.direccion = c.direccion;
+            }
+            tipoClienteEncontrado.value = c.tipo_cliente || 'Comprador';
+            mensajeCliente.value = c.tipo_cliente === 'Comprador'
+                ? 'Cliente encontrado (Comprador): al generar la constancia se actualizará automáticamente a «Ambos».'
+                : `Cliente encontrado (${c.tipo_cliente}): datos autocompletados.`;
+        } else {
+            mensajeCliente.value = res.data?.message || 'Cédula nueva: se registrará automáticamente como Vendedor en clientes.';
+        }
+    } catch {
+        mensajeCliente.value = '';
+    } finally {
+        buscandoCliente.value = false;
+    }
+};
 
 const seleccionarCedula = (event) => {
     archivoCedula.value = event.target.files[0] || null;
@@ -88,7 +136,12 @@ const escanearCedulaConGemini = async () => {
             if (d.cedula_conyuge !== undefined) {
                 datosCedula.cedula_conyuge = d.cedula_conyuge || '';
             }
+            if (d.direccion) datosCedula.direccion = d.direccion;
+            if (d.telefono) datosCedula.telefono = d.telefono;
             exitoCedula.value = 'Cédula almacenada y datos extraídos correctamente con Gemini.';
+            if (datosCedula.cedula) {
+                buscarClientePorCedula();
+            }
         } else {
             errorCedula.value = res.data?.message || 'No se pudo procesar la cédula con Gemini.';
         }
@@ -124,6 +177,8 @@ const generarYDescargarConstancia = async () => {
             {
                 nombre_completo: datosCedula.nombre_completo,
                 cedula: datosCedula.cedula,
+                telefono: datosCedula.telefono,
+                direccion: datosCedula.direccion,
                 estado_civil: datosCedula.estado_civil,
                 es_casado: datosCedula.es_casado,
                 nombre_conyuge: datosCedula.es_casado ? datosCedula.nombre_conyuge : '',
@@ -244,12 +299,58 @@ const generarYDescargarConstancia = async () => {
                     </div>
                 </div>
 
-                <!-- Paso 2: Datos editables del vendedor -->
+                <!-- Paso 2: Datos editables del vendedor (se sincroniza en clientes como Vendedor / Ambos) -->
                 <form class="space-y-4" @submit.prevent="generarYDescargarConstancia">
-                    <p class="text-sm font-semibold text-gray-900">
-                        2. Datos del vendedor para el contrato
-                    </p>
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <p class="text-sm font-semibold text-gray-900">
+                            2. Datos del cliente vendedor para el contrato
+                        </p>
+                        <span
+                            v-if="tipoClienteEncontrado"
+                            class="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-bold text-indigo-800"
+                        >
+                            Tipo actual: {{ tipoClienteEncontrado }}
+                        </span>
+                    </div>
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="constancia-cedula" class="block text-xs font-medium text-gray-700">
+                                Cédula / RUC del vendedor *
+                            </label>
+                            <div class="mt-1 flex gap-1.5">
+                                <input
+                                    id="constancia-cedula"
+                                    v-model="datosCedula.cedula"
+                                    type="text"
+                                    required
+                                    maxlength="30"
+                                    class="block w-full rounded-md border-gray-300 font-mono text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                    placeholder="1801234567"
+                                    @blur="buscarClientePorCedula"
+                                />
+                                <button
+                                    type="button"
+                                    :disabled="buscandoCliente"
+                                    class="shrink-0 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-bold text-yellow-400 hover:bg-gray-800 disabled:opacity-50"
+                                    @click="buscarClientePorCedula"
+                                >
+                                    {{ buscandoCliente ? '...' : 'Buscar' }}
+                                </button>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="constancia-estado-civil" class="block text-xs font-medium text-gray-700">
+                                Estado civil
+                            </label>
+                            <input
+                                id="constancia-estado-civil"
+                                v-model="datosCedula.estado_civil"
+                                type="text"
+                                maxlength="60"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                placeholder="SOLTERO / CASADO"
+                            />
+                        </div>
                         <div class="sm:col-span-2">
                             <label for="constancia-nombre" class="block text-xs font-medium text-gray-700">
                                 Nombre completo del vendedor *
@@ -265,33 +366,35 @@ const generarYDescargarConstancia = async () => {
                             />
                         </div>
                         <div>
-                            <label for="constancia-cedula" class="block text-xs font-medium text-gray-700">
-                                Número de cédula *
+                            <label for="constancia-telefono" class="block text-xs font-medium text-gray-700">
+                                Teléfono del vendedor
                             </label>
                             <input
-                                id="constancia-cedula"
-                                v-model="datosCedula.cedula"
+                                id="constancia-telefono"
+                                v-model="datosCedula.telefono"
                                 type="text"
-                                required
                                 maxlength="30"
                                 class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                placeholder="1801234567"
+                                placeholder="0999999999"
                             />
                         </div>
                         <div>
-                            <label for="constancia-estado-civil" class="block text-xs font-medium text-gray-700">
-                                Estado civil
+                            <label for="constancia-direccion" class="block text-xs font-medium text-gray-700">
+                                Dirección del vendedor
                             </label>
                             <input
-                                id="constancia-estado-civil"
-                                v-model="datosCedula.estado_civil"
+                                id="constancia-direccion"
+                                v-model="datosCedula.direccion"
                                 type="text"
-                                maxlength="60"
+                                maxlength="200"
                                 class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                placeholder="SOLTERO / CASADO"
+                                placeholder="Ciudad / Dirección"
                             />
                         </div>
                     </div>
+                    <p v-if="mensajeCliente" class="text-xs font-semibold text-emerald-700">
+                        {{ mensajeCliente }}
+                    </p>
 
                     <div class="flex items-center gap-2">
                         <input

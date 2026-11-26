@@ -31,8 +31,23 @@ const fechaTexto = (fecha) => (
 
 const cedulaUrlActual = ref(props.venta.cedula_url || null);
 const constanciaUrlActual = ref(props.venta.constancia_url || null);
-const mostrarModalConstancia = ref(false);
+const pagareUrlActual = ref(props.venta.credito?.pagare_url || null);
+const mostrarModalFaltantes = ref(false);
+const modoModalFaltantes = ref('constancia'); // 'pagare' | 'constancia' | 'editar'
+const mostrarTodosLosCamposModal = ref(false);
+const guardandoComprador = ref(false);
+const errorModalFaltantes = ref('');
 const mensajeConstancia = ref('');
+const paso1CedulaRef = ref(null);
+
+watch(
+    () => props.venta.credito?.pagare_url,
+    (nuevaUrl) => {
+        if (nuevaUrl) {
+            pagareUrlActual.value = nuevaUrl;
+        }
+    },
+);
 
 // 1. Formulario de Tipo de Operación y Precio Acordado
 const operacionForm = useForm({
@@ -152,6 +167,15 @@ const pagoForm = useForm({
     observaciones: '',
     fecha_pago: hoyIso,
     documento_comprobante: null,
+    pagos_contado: [
+        {
+            comprobante: null,
+            monto: String(props.venta.precio_acordado || props.venta.precio_base || ''),
+            metodo_pago: 'transferencia',
+            numero_referencia: '',
+            fecha_pago: hoyIso,
+        },
+    ],
     cuotas: [
         { comprobante: null, monto: '', fecha_pago: hoyIso },
     ],
@@ -322,6 +346,33 @@ const eliminarCuota = (index) => {
     pagoForm.cuotas.splice(index, 1);
 };
 
+const sumaPagosContado = computed(() =>
+    Number(
+        pagoForm.pagos_contado
+            .reduce((acc, item) => acc + (Number(item.monto) || 0), 0)
+            .toFixed(2),
+    ),
+);
+const excedeMontoContado = computed(() =>
+    montoObjetivoVenta.value > 0 && sumaPagosContado.value > montoObjetivoVenta.value + 0.009,
+);
+const saldoRestanteContado = computed(() =>
+    Math.max(0, Number((montoObjetivoVenta.value - sumaPagosContado.value).toFixed(2))),
+);
+const agregarPagoContado = () => {
+    pagoForm.pagos_contado.push({
+        comprobante: null,
+        monto: saldoRestanteContado.value > 0 ? String(saldoRestanteContado.value) : '',
+        metodo_pago: 'transferencia',
+        numero_referencia: '',
+        fecha_pago: hoyIso,
+    });
+};
+const eliminarPagoContado = (index) => {
+    if (pagoForm.pagos_contado.length <= 1) return;
+    pagoForm.pagos_contado.splice(index, 1);
+};
+
 const tieneCedulaComprador = computed(() => Boolean(cedulaUrlActual.value));
 
 const puedeEnviarFormaPago = computed(() => {
@@ -346,7 +397,10 @@ const puedeEnviarFormaPago = computed(() => {
             && pagoForm.cuotas_credito.every((c) => Number(c.monto) > 0 && Boolean(c.fecha_vencimiento));
     }
     if (pagoForm.forma_pago === 'contado') {
-        return Boolean(pagoForm.documento_comprobante);
+        if (excedeMontoContado.value || pagoForm.pagos_contado.length === 0) {
+            return false;
+        }
+        return pagoForm.pagos_contado.every((p) => Boolean(p.comprobante) && Number(p.monto) > 0);
     }
     if (pagoForm.forma_pago === 'cuotas') {
         if (excedeMontoObjetivo.value || pagoForm.cuotas.length === 0) {
@@ -389,8 +443,7 @@ const enviarFormaPago = () => {
             if (data.forma_pago === 'contado') {
                 return {
                     forma_pago: 'contado',
-                    documento_comprobante: data.documento_comprobante,
-                    fecha_pago: data.fecha_pago,
+                    pagos_contado: data.pagos_contado,
                 };
             }
             return {
@@ -464,7 +517,7 @@ const registrarAbonoAdicional = () => {
     });
 };
 
-// 3. Escaneo de Cédula con IA y Generación de Constancia Word (.docx)
+// 3. Escaneo de Cédula con IA en segundo plano, Datos Faltantes y Generación de Constancia Word (.docx)
 const archivoCedula = ref(null);
 const escaneandoCedula = ref(false);
 const errorCedula = ref('');
@@ -474,22 +527,95 @@ const generandoConstancia = ref(false);
 const errorConstancia = ref('');
 
 const datosCedula = reactive({
-    nombre_completo: props.venta.datos_cedula_comprador?.nombre_completo || '',
-    cedula: props.venta.datos_cedula_comprador?.cedula || '',
-    direccion: props.venta.datos_cedula_comprador?.direccion || '',
-    correo: props.venta.datos_cedula_comprador?.correo || '',
-    telefono: props.venta.datos_cedula_comprador?.telefono || '',
+    nombre_completo: props.venta.datos_cedula_comprador?.nombre_completo || props.venta.cliente_nombre || '',
+    cedula: props.venta.datos_cedula_comprador?.cedula || props.venta.cliente_cedula || '',
+    direccion: props.venta.datos_cedula_comprador?.direccion || props.venta.cliente_direccion || '',
+    correo: props.venta.datos_cedula_comprador?.correo || props.venta.cliente_correo || '',
+    telefono: props.venta.datos_cedula_comprador?.telefono || props.venta.cliente_telefono || '',
     estado_civil: props.venta.datos_cedula_comprador?.estado_civil || '',
     es_casado: Boolean(props.venta.datos_cedula_comprador?.es_casado),
     nombre_conyuge: props.venta.datos_cedula_comprador?.nombre_conyuge || '',
     cedula_conyuge: props.venta.datos_cedula_comprador?.cedula_conyuge || '',
 });
 
+const datosVendedorAnterior = reactive({
+    nombre_cliente_vendedor: props.venta.vendedor_anterior?.nombre_completo || '',
+    cedula_cliente_vendedor: props.venta.vendedor_anterior?.cedula || '',
+});
+
+const requiereClienteVendedor = computed(() =>
+    Boolean(props.venta.constancia_estrategia?.requiere_cliente_vendedor),
+);
+
+const camposFaltantesPagare = computed(() => {
+    const faltantes = [];
+    if (!String(datosCedula.nombre_completo || '').trim()) {
+        faltantes.push({ key: 'nombre_completo', label: 'Nombre completo' });
+    }
+    if (!String(datosCedula.cedula || '').trim()) {
+        faltantes.push({ key: 'cedula', label: 'Cédula / RUC' });
+    }
+    if (!String(datosCedula.direccion || '').trim()) {
+        faltantes.push({ key: 'direccion', label: 'Dirección domiciliaria' });
+    }
+    if (!String(datosCedula.correo || '').trim()) {
+        faltantes.push({ key: 'correo', label: 'Correo electrónico' });
+    }
+    return faltantes;
+});
+
+const camposFaltantesConstancia = computed(() => {
+    const faltantes = [...camposFaltantesPagare.value];
+    if (!String(datosCedula.telefono || '').trim()) {
+        faltantes.push({ key: 'telefono', label: 'Teléfono del comprador' });
+    }
+    if (requiereClienteVendedor.value) {
+        if (!String(datosVendedorAnterior.nombre_cliente_vendedor || '').trim()) {
+            faltantes.push({ key: 'nombre_cliente_vendedor', label: 'Nombre del propietario anterior' });
+        }
+        if (!String(datosVendedorAnterior.cedula_cliente_vendedor || '').trim()) {
+            faltantes.push({ key: 'cedula_cliente_vendedor', label: 'Cédula del propietario anterior' });
+        }
+    }
+    return faltantes;
+});
+
+const camposFaltantesActuales = computed(() =>
+    modoModalFaltantes.value === 'pagare'
+        ? camposFaltantesPagare.value
+        : camposFaltantesConstancia.value,
+);
+
+const mostrarCampoEnModal = (key) =>
+    mostrarTodosLosCamposModal.value
+    || modoModalFaltantes.value === 'editar'
+    || camposFaltantesActuales.value.some((c) => c.key === key);
+
+const descargarArchivo = (url) => {
+    if (!url) return;
+    const enlace = document.createElement('a');
+    enlace.href = url;
+    enlace.setAttribute('download', '');
+    document.body.appendChild(enlace);
+    enlace.click();
+    document.body.removeChild(enlace);
+};
+
+const irAPasoUnoCedula = () => {
+    paso1CedulaRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
 const seleccionarCedula = (event) => {
-    archivoCedula.value = event.target.files[0] || null;
+    const archivo = event.target.files[0] || null;
+    archivoCedula.value = archivo;
     errorCedula.value = '';
     avisoCedula.value = '';
     exitoCedula.value = '';
+
+    // Escaneo automático con Gemini Vision en segundo plano al subir la cédula
+    if (archivo) {
+        escanearCedulaConGemini();
+    }
 };
 
 const escanearCedulaConGemini = async () => {
@@ -522,26 +648,29 @@ const escanearCedulaConGemini = async () => {
         if (res.data?.cedula_url) {
             cedulaUrlActual.value = res.data.cedula_url;
         }
+        if (res.data?.pagare_url) {
+            pagareUrlActual.value = res.data.pagare_url;
+        }
 
         if (res.data?.ocr_fallo) {
             avisoCedula.value = res.data.warning
-                || 'Gemini no pudo analizar la cédula, pero el archivo sí se almacenó correctamente. Completa los datos manualmente.';
+                || 'Gemini no pudo analizar la cédula, pero el archivo sí se almacenó correctamente. Los datos faltantes se solicitarán al emitir el Pagaré o la Constancia.';
         } else if (res.data?.success) {
             const d = res.data.datos_cedula_comprador || {};
-            datosCedula.nombre_completo = d.nombre_completo || '';
-            datosCedula.cedula = d.cedula || '';
-            datosCedula.direccion = d.direccion || datosCedula.direccion || '';
-            datosCedula.correo = d.correo || datosCedula.correo || '';
-            datosCedula.telefono = d.telefono || datosCedula.telefono || '';
-            datosCedula.estado_civil = d.estado_civil || '';
+            if (d.nombre_completo) datosCedula.nombre_completo = d.nombre_completo;
+            if (d.cedula) datosCedula.cedula = d.cedula;
+            if (d.direccion) datosCedula.direccion = d.direccion;
+            if (d.correo) datosCedula.correo = d.correo;
+            if (d.telefono) datosCedula.telefono = d.telefono;
+            if (d.estado_civil) datosCedula.estado_civil = d.estado_civil;
             datosCedula.es_casado = Boolean(d.es_casado);
-            datosCedula.nombre_conyuge = d.nombre_conyuge || '';
+            if (d.nombre_conyuge) datosCedula.nombre_conyuge = d.nombre_conyuge;
             if (d.cedula_conyuge !== undefined) {
                 datosCedula.cedula_conyuge = d.cedula_conyuge || '';
             }
             exitoCedula.value = res.data.pagare_url
-                ? 'Cédula escaneada, cliente sincronizado y Pagaré (.docx) actualizado automáticamente.'
-                : 'Cédula escaneada y datos del cliente sincronizados correctamente.';
+                ? 'Cédula procesada con IA en segundo plano, cliente sincronizado y Pagaré (.docx) actualizado.'
+                : 'Cédula procesada con IA en segundo plano y datos del comprador sincronizados en el expediente.';
         } else {
             errorCedula.value = res.data?.message || 'No se pudo procesar la cédula con Gemini.';
         }
@@ -553,9 +682,89 @@ const escanearCedulaConGemini = async () => {
     }
 };
 
+const iniciarDescargaPagare = () => {
+    if (!pagareUrlActual.value) {
+        return;
+    }
+    if (camposFaltantesPagare.value.length > 0) {
+        modoModalFaltantes.value = 'pagare';
+        mostrarTodosLosCamposModal.value = false;
+        errorModalFaltantes.value = '';
+        mostrarModalFaltantes.value = true;
+        return;
+    }
+    descargarArchivo(pagareUrlActual.value);
+};
+
+const iniciarGeneracionConstancia = () => {
+    if (!puedeGenerarConstancia.value || generandoConstancia.value) {
+        return;
+    }
+    if (camposFaltantesConstancia.value.length > 0) {
+        modoModalFaltantes.value = 'constancia';
+        mostrarTodosLosCamposModal.value = false;
+        errorModalFaltantes.value = '';
+        mostrarModalFaltantes.value = true;
+        return;
+    }
+    generarYDescargarConstancia();
+};
+
+const abrirEdicionComprador = () => {
+    modoModalFaltantes.value = 'editar';
+    mostrarTodosLosCamposModal.value = true;
+    errorModalFaltantes.value = '';
+    mostrarModalFaltantes.value = true;
+};
+
+const completarDatosYContinuar = async () => {
+    errorModalFaltantes.value = '';
+
+    if (modoModalFaltantes.value === 'constancia') {
+        await generarYDescargarConstancia();
+        return;
+    }
+
+    guardandoComprador.value = true;
+    try {
+        const res = await axios.patch(
+            route('mis-ventas.comprador.update', props.venta.id_venta),
+            {
+                nombre_completo: datosCedula.nombre_completo,
+                cedula: datosCedula.cedula,
+                direccion: datosCedula.direccion,
+                correo: datosCedula.correo,
+                telefono: datosCedula.telefono,
+                estado_civil: datosCedula.estado_civil,
+                es_casado: datosCedula.es_casado,
+                nombre_conyuge: datosCedula.es_casado ? datosCedula.nombre_conyuge : '',
+                cedula_conyuge: datosCedula.es_casado ? datosCedula.cedula_conyuge : '',
+            },
+        );
+
+        if (res.data?.pagare_url) {
+            pagareUrlActual.value = res.data.pagare_url;
+        }
+        mostrarModalFaltantes.value = false;
+        exitoCedula.value = modoModalFaltantes.value === 'pagare'
+            ? 'Datos completados y Pagaré (.docx) regenerado correctamente.'
+            : 'Datos del comprador actualizados correctamente.';
+
+        if (modoModalFaltantes.value === 'pagare' && pagareUrlActual.value) {
+            descargarArchivo(pagareUrlActual.value);
+        }
+    } catch (error) {
+        const errores = Object.values(error.response?.data?.errors || {}).flat();
+        errorModalFaltantes.value = errores[0] || error.response?.data?.message || 'Error al guardar los datos del comprador.';
+    } finally {
+        guardandoComprador.value = false;
+    }
+};
+
 const generarYDescargarConstancia = async () => {
     generandoConstancia.value = true;
     errorConstancia.value = '';
+    errorModalFaltantes.value = '';
     mensajeConstancia.value = '';
 
     try {
@@ -571,26 +780,30 @@ const generarYDescargarConstancia = async () => {
                 es_casado: datosCedula.es_casado,
                 nombre_conyuge: datosCedula.es_casado ? datosCedula.nombre_conyuge : '',
                 cedula_conyuge: datosCedula.es_casado ? datosCedula.cedula_conyuge : '',
+                nombre_cliente_vendedor: datosVendedorAnterior.nombre_cliente_vendedor,
+                cedula_cliente_vendedor: datosVendedorAnterior.cedula_cliente_vendedor,
             },
         );
 
         if (res.data?.success && res.data.constancia_url) {
             constanciaUrlActual.value = res.data.constancia_url;
-            mensajeConstancia.value = 'Constancia generada correctamente en almacenamiento privado.';
-            mostrarModalConstancia.value = false;
-
-            const enlace = document.createElement('a');
-            enlace.href = res.data.constancia_url;
-            enlace.setAttribute('download', '');
-            document.body.appendChild(enlace);
-            enlace.click();
-            document.body.removeChild(enlace);
+            mensajeConstancia.value = 'Constancia de venta generada correctamente en almacenamiento privado.';
+            mostrarModalFaltantes.value = false;
+            descargarArchivo(res.data.constancia_url);
         } else {
-            errorConstancia.value = res.data?.message || 'No se pudo generar la constancia.';
+            const msg = res.data?.message || 'No se pudo generar la constancia.';
+            errorConstancia.value = msg;
+            errorModalFaltantes.value = msg;
         }
     } catch (error) {
         const errores = Object.values(error.response?.data?.errors || {}).flat();
-        errorConstancia.value = errores[0] || error.response?.data?.message || 'Error al generar la constancia.';
+        const msg = errores[0] || error.response?.data?.message || 'Error al generar la constancia.';
+        errorConstancia.value = msg;
+        errorModalFaltantes.value = msg;
+        if (error.response?.status === 422 && !mostrarModalFaltantes.value) {
+            modoModalFaltantes.value = 'constancia';
+            mostrarModalFaltantes.value = true;
+        }
     } finally {
         generandoConstancia.value = false;
     }
@@ -700,22 +913,23 @@ const estadoClases = (estado) => ({
                 >
                     <div>
                         <p class="text-sm font-bold text-indigo-950">
-                            Comprobante de pago registrado · Falta generar la constancia (.docx)
+                            Comprobante / pago registrado · Falta generar la constancia de venta (.docx)
                         </p>
                         <p class="mt-1 text-xs text-indigo-800">
-                            Sube la cédula del comprador para extraer sus datos con Gemini IA y descarga el documento Word (.docx) para completar la operación.
+                            Verifica que la cédula esté cargada en el Paso 1 y genera la constancia en el Paso 3 según el tipo de contrato del vehículo.
                         </p>
                     </div>
                     <button
                         type="button"
-                        class="shrink-0 rounded-md bg-yellow-500 px-5 py-2.5 text-sm font-bold text-gray-900 shadow-sm hover:bg-yellow-400"
-                        @click="mostrarModalConstancia = true"
+                        :disabled="!puedeGenerarConstancia || generandoConstancia"
+                        class="shrink-0 rounded-md bg-yellow-500 px-5 py-2.5 text-sm font-bold text-gray-900 shadow-sm hover:bg-yellow-400 disabled:opacity-50"
+                        @click="iniciarGeneracionConstancia"
                     >
-                        Generar Constancia
+                        {{ generandoConstancia ? 'Generando...' : 'Generar Constancia' }}
                     </button>
                 </section>
 
-                <!-- 1. RESUMEN DEL VEHÍCULO Y DESCARGAS PRIVADAS -->
+                <!-- RESUMEN DEL VEHÍCULO Y DESCARGAS PRIVADAS -->
                 <section class="grid grid-cols-1 gap-4 rounded-lg border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Vehículo</p>
@@ -732,12 +946,18 @@ const estadoClases = (estado) => ({
                         <p class="text-xs text-gray-500">Iniciado: {{ fechaTexto(venta.created_at) }}</p>
                     </div>
                     <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Estado del vehículo</p>
-                        <p class="mt-1">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Estado / Contrato de ingreso</p>
+                        <div class="mt-1 flex flex-wrap items-center gap-1.5">
                             <span class="rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-bold text-yellow-800">
                                 {{ venta.vehiculo?.estado }}
                             </span>
-                        </p>
+                            <span
+                                v-if="venta.vehiculo?.tipo_contrato_nombre"
+                                class="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700"
+                            >
+                                {{ venta.vehiculo.tipo_contrato_nombre }}
+                            </span>
+                        </div>
                     </div>
                     <div class="flex flex-wrap items-end gap-2">
                         <a
@@ -757,12 +977,138 @@ const estadoClases = (estado) => ({
                     </div>
                 </section>
 
-                <!-- 2. CONFIGURACIÓN DE TIPO DE OPERACIÓN Y PRECIO DE VENTA (CON VALIDACIÓN Y APROBACIÓN DE DESCUENTO) -->
+                <!-- PASO 1: IDENTIFICACIÓN DEL COMPRADOR (SUBIDA Y ESCANEO DE CÉDULA CON IA EN SEGUNDO PLANO) -->
+                <section ref="paso1CedulaRef" class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+                    <div class="flex flex-col justify-between gap-3 border-b border-gray-200 bg-gray-900 px-5 py-4 text-white sm:flex-row sm:items-center">
+                        <div>
+                            <h3 class="text-sm font-bold uppercase tracking-wide text-yellow-400">
+                                Paso 1 · Identificación del Comprador (Cédula + IA)
+                            </h3>
+                            <p class="mt-0.5 text-xs text-gray-300">
+                                Sube la cédula del comprador. Gemini IA extraerá sus datos automáticamente en segundo plano sin interrumpir tu flujo.
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span
+                                v-if="escaneandoCedula"
+                                class="rounded-full bg-amber-400/20 px-3 py-1 text-xs font-bold text-amber-300"
+                            >
+                                ⏳ Analizando con IA...
+                            </span>
+                            <span
+                                v-else-if="cedulaUrlActual"
+                                class="rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-300"
+                            >
+                                ✓ Cédula cargada
+                            </span>
+                            <span
+                                v-else
+                                class="rounded-full bg-red-500/20 px-3 py-1 text-xs font-bold text-red-300"
+                            >
+                                Pendiente de subir
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="space-y-4 p-5">
+                        <div class="flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="flex-1">
+                                <label for="paso1-documento-cedula" class="block text-xs font-bold uppercase tracking-wide text-gray-700">
+                                    Archivo de cédula del comprador (JPG, PNG, WEBP o PDF · Privado)
+                                </label>
+                                <input
+                                    id="paso1-documento-cedula"
+                                    type="file"
+                                    :disabled="escaneandoCedula"
+                                    accept="image/jpeg,image/png,image/webp,.pdf"
+                                    class="mt-1.5 block w-full text-xs text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-900 file:px-3.5 file:py-2 file:font-semibold file:text-yellow-400 hover:file:bg-gray-800 disabled:opacity-50"
+                                    @change="seleccionarCedula"
+                                />
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <a
+                                    v-if="cedulaUrlActual"
+                                    :href="cedulaUrlActual"
+                                    class="rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                                >
+                                    Ver cédula guardada
+                                </a>
+                                <button
+                                    v-if="cedulaUrlActual || datosCedula.nombre_completo"
+                                    type="button"
+                                    class="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700"
+                                    @click="abrirEdicionComprador"
+                                >
+                                    Revisar / editar datos
+                                </button>
+                            </div>
+                        </div>
+
+                        <div
+                            v-if="escaneandoCedula"
+                            role="status"
+                            class="flex items-center gap-3 rounded-md border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs font-medium text-indigo-900"
+                        >
+                            <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                            <span>Subiendo cédula de forma privada y extrayendo datos del comprador con Gemini Vision en segundo plano...</span>
+                        </div>
+
+                        <div
+                            v-if="exitoCedula"
+                            role="status"
+                            class="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-xs font-medium text-emerald-900"
+                        >
+                            ✅ {{ exitoCedula }}
+                        </div>
+                        <div
+                            v-if="avisoCedula"
+                            role="alert"
+                            class="rounded-md border-2 border-amber-400 bg-amber-50 p-3 text-xs font-medium text-amber-950"
+                        >
+                            ⚠️ {{ avisoCedula }}
+                        </div>
+                        <p v-if="errorCedula" role="alert" class="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-700">
+                            {{ errorCedula }}
+                        </p>
+
+                        <!-- Resumen compacto de datos sincronizados del comprador -->
+                        <div
+                            v-if="datosCedula.nombre_completo || datosCedula.cedula || cedulaUrlActual"
+                            class="grid grid-cols-1 gap-3 rounded-lg border border-gray-200 bg-white p-3.5 text-xs sm:grid-cols-2 lg:grid-cols-4"
+                        >
+                            <div>
+                                <span class="block text-[10px] font-semibold uppercase text-gray-500">Comprador</span>
+                                <span class="font-bold text-gray-900">{{ datosCedula.nombre_completo || 'Por completar' }}</span>
+                            </div>
+                            <div>
+                                <span class="block text-[10px] font-semibold uppercase text-gray-500">Cédula / RUC</span>
+                                <span class="font-mono font-bold text-gray-900">{{ datosCedula.cedula || 'Por completar' }}</span>
+                            </div>
+                            <div>
+                                <span class="block text-[10px] font-semibold uppercase text-gray-500">Dirección</span>
+                                <span class="text-gray-800">{{ datosCedula.direccion || 'Se pedirá al emitir documento' }}</span>
+                            </div>
+                            <div>
+                                <span class="block text-[10px] font-semibold uppercase text-gray-500">Correo electrónico</span>
+                                <span class="text-gray-800">{{ datosCedula.correo || 'Se pedirá al emitir documento' }}</span>
+                            </div>
+                        </div>
+
+                        <p
+                            v-if="cedulaUrlActual && camposFaltantesPagare.length > 0"
+                            class="text-[11px] text-gray-600"
+                        >
+                            Nota: Si faltan campos no visibles en la cédula (<strong>{{ camposFaltantesPagare.map((c) => c.label).join(', ') }}</strong>), puedes continuar configurando el pago y te los solicitaremos únicamente al emitir el Pagaré o la Constancia.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- PASO 2A: CONFIGURACIÓN COMERCIAL (TIPO DE OPERACIÓN Y PRECIO DE VENTA ACORDADO) -->
                 <section class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
                     <div class="flex flex-col justify-between gap-3 border-b border-gray-200 bg-gray-900 px-5 py-4 text-white sm:flex-row sm:items-center">
                         <div>
                             <h3 class="text-sm font-bold uppercase tracking-wide text-yellow-400">
-                                1. Tipo de Operación y Precio de Venta Acordado
+                                Paso 2A · Tipo de Operación y Precio de Venta Acordado
                             </h3>
                             <p class="mt-0.5 text-xs text-gray-300">
                                 Selecciona si la operación corresponde a una Venta o Reserva y define el precio acordado con el cliente.
@@ -956,97 +1302,12 @@ const estadoClases = (estado) => ({
                     </div>
                 </section>
 
-                <!-- 3. TABLA DE DOCUMENTACIÓN COMERCIAL -->
-                <section class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-                    <div class="border-b border-gray-200 bg-gray-50 px-5 py-3">
-                        <h3 class="text-sm font-semibold text-gray-900">2. Documentación Comercial</h3>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200 text-sm">
-                            <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                <tr>
-                                    <th class="px-5 py-3">Documento</th>
-                                    <th class="px-5 py-3">Estado</th>
-                                    <th class="px-5 py-3">Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-100 bg-white">
-                                <tr>
-                                    <td class="px-5 py-3 font-medium text-gray-900">Cédula del comprador</td>
-                                    <td class="px-5 py-3">
-                                        <span
-                                            v-if="cedulaUrlActual"
-                                            class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800"
-                                        >
-                                            Cargada
-                                        </span>
-                                        <span
-                                            v-else
-                                            class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-semibold text-gray-600"
-                                        >
-                                            Pendiente
-                                        </span>
-                                    </td>
-                                    <td class="px-5 py-3">
-                                        <a
-                                            v-if="cedulaUrlActual"
-                                            :href="cedulaUrlActual"
-                                            class="text-xs font-semibold text-indigo-700 hover:text-indigo-900"
-                                        >
-                                            Ver / Descargar cédula
-                                        </a>
-                                        <span v-else class="text-xs text-gray-500">Se escanea en Generar Constancia</span>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td class="px-5 py-3 font-medium text-gray-900">
-                                        Constancia / Contrato de {{ operacionForm.tipo_operacion === 'reserva' ? 'Reserva' : 'Venta' }} (.docx)
-                                    </td>
-                                    <td class="px-5 py-3">
-                                        <span
-                                            v-if="constanciaUrlActual"
-                                            class="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800"
-                                        >
-                                            Generada
-                                        </span>
-                                        <span
-                                            v-else
-                                            class="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-semibold text-indigo-800"
-                                        >
-                                            Pendiente de generar
-                                        </span>
-                                    </td>
-                                    <td class="px-5 py-3">
-                                        <div class="flex flex-wrap items-center gap-3">
-                                            <a
-                                                v-if="constanciaUrlActual"
-                                                :href="constanciaUrlActual"
-                                                class="text-xs font-semibold text-blue-700 hover:text-blue-900"
-                                            >
-                                                Descargar constancia (.docx)
-                                            </a>
-                                            <button
-                                                type="button"
-                                                :disabled="!puedeGenerarConstancia"
-                                                class="rounded-md bg-yellow-500 px-3 py-1.5 text-xs font-bold text-gray-900 shadow-xs hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-40"
-                                                @click="mostrarModalConstancia = true"
-                                            >
-                                                {{ constanciaUrlActual ? 'Actualizar / Regenerar' : 'Generar Constancia' }}
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <!-- 4. SUBIDA DE COMPROBANTES DE PAGO (ALMACENAMIENTO PRIVADO LOCAL) -->
+                <!-- PASO 2B: FORMA DE PAGO, COMPROBANTES Y CRÉDITO (ALMACENAMIENTO PRIVADO LOCAL) -->
                 <section class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
                     <div class="flex flex-col justify-between gap-3 border-b border-gray-200 bg-gray-900 px-5 py-4 text-white sm:flex-row sm:items-center">
                         <div>
                             <h3 class="text-sm font-bold uppercase tracking-wide text-yellow-400">
-                                3. Gestión de Pagos y Comprobantes
+                                Paso 2B · Forma de Pago, Comprobantes y Crédito
                             </h3>
                             <p class="mt-0.5 text-xs text-gray-300">
                                 Todos los comprobantes se almacenan de forma privada y segura en el servidor.
@@ -1134,9 +1395,9 @@ const estadoClases = (estado) => ({
                                 <button
                                     type="button"
                                     class="shrink-0 rounded-md bg-yellow-500 px-4 py-2 text-xs font-bold text-gray-900 shadow-xs hover:bg-yellow-400"
-                                    @click="mostrarModalConstancia = true"
+                                    @click="irAPasoUnoCedula"
                                 >
-                                    Subir / Escanear cédula
+                                    Ir al Paso 1: Subir cédula
                                 </button>
                             </div>
 
@@ -1547,31 +1808,109 @@ const estadoClases = (estado) => ({
                             </div>
                         </div>
 
-                        <!-- CONTADO -->
+                        <!-- CONTADO (1 pago total o varios comprobantes que completen el valor; unificado en cuotas_credito) -->
                         <div
                             v-else
-                            class="grid grid-cols-1 gap-4 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4 sm:grid-cols-2"
+                            class="space-y-4 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4"
                         >
-                            <div>
-                                <label class="block text-xs font-semibold text-gray-800">
-                                    Comprobante de pago ({{ formatearMoneda(montoObjetivoVenta) }}) *
-                                </label>
-                                <input
-                                    type="file"
-                                    accept="image/jpeg,image/png,image/webp,.pdf"
-                                    required
-                                    class="mt-1 block w-full text-xs text-gray-600 file:mr-2 file:rounded-md file:border-0 file:bg-emerald-700 file:px-3 py-1.5 file:text-white"
-                                    @change="pagoForm.documento_comprobante = $event.target.files[0] || null"
-                                />
+                            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <div class="flex flex-wrap items-center gap-4">
+                                    <span class="font-semibold text-gray-700">
+                                        Total contado registrado:
+                                        <strong class="font-mono text-sm" :class="excedeMontoContado ? 'text-red-700' : 'text-emerald-700'">
+                                            {{ formatearMoneda(sumaPagosContado) }}
+                                        </strong>
+                                    </span>
+                                    <span class="font-semibold text-gray-700">
+                                        Saldo restante:
+                                        <strong class="font-mono text-sm text-gray-900">{{ formatearMoneda(saldoRestanteContado) }}</strong>
+                                    </span>
+                                </div>
+                                <button
+                                    type="button"
+                                    :disabled="saldoRestanteContado <= 0.009"
+                                    class="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-bold text-yellow-400 hover:bg-gray-800 disabled:opacity-40"
+                                    @click="agregarPagoContado"
+                                >
+                                    + Añadir otro comprobante de contado
+                                </button>
                             </div>
-                            <div>
-                                <label class="block text-xs font-semibold text-gray-800">Fecha de pago</label>
-                                <input
-                                    v-model="pagoForm.fecha_pago"
-                                    type="date"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
+
+                            <div class="space-y-3">
+                                <div
+                                    v-for="(pagoItem, idx) in pagoForm.pagos_contado"
+                                    :key="idx"
+                                    class="grid grid-cols-1 items-end gap-3 rounded-md border border-emerald-200 bg-white p-3 sm:grid-cols-12"
+                                >
+                                    <div class="sm:col-span-4">
+                                        <label class="block text-xs font-medium text-gray-700">
+                                            Comprobante de pago #{{ idx + 1 }} (privado) *
+                                        </label>
+                                        <input
+                                            type="file"
+                                            accept="image/jpeg,image/png,image/webp,.pdf"
+                                            required
+                                            class="mt-1 block w-full text-xs text-gray-600 file:mr-2 file:rounded file:border-0 file:bg-emerald-700 file:px-2.5 file:py-1.5 file:text-white"
+                                            @change="pagoItem.comprobante = $event.target.files[0] || null"
+                                        />
+                                    </div>
+                                    <div class="sm:col-span-2">
+                                        <label class="block text-xs font-medium text-gray-700">Método *</label>
+                                        <select
+                                            v-model="pagoItem.metodo_pago"
+                                            class="mt-1 block w-full rounded-md border-gray-300 text-xs shadow-sm"
+                                        >
+                                            <option value="transferencia">Transferencia</option>
+                                            <option value="efectivo">Efectivo</option>
+                                            <option value="deposito">Depósito</option>
+                                            <option value="cheque">Cheque</option>
+                                        </select>
+                                    </div>
+                                    <div class="sm:col-span-2">
+                                        <label class="block text-xs font-medium text-gray-700">N° Comprobante</label>
+                                        <input
+                                            v-model="pagoItem.numero_referencia"
+                                            type="text"
+                                            maxlength="100"
+                                            placeholder="Ref. opcional"
+                                            class="mt-1 block w-full rounded-md border-gray-300 font-mono text-xs shadow-sm"
+                                        />
+                                    </div>
+                                    <div class="sm:col-span-2">
+                                        <label class="block text-xs font-medium text-gray-700">Valor ($) *</label>
+                                        <input
+                                            v-model="pagoItem.monto"
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            required
+                                            class="mt-1 block w-full rounded-md border-gray-300 font-mono text-sm font-bold shadow-sm"
+                                        />
+                                    </div>
+                                    <div class="sm:col-span-2 flex items-end gap-1.5">
+                                        <div class="flex-1">
+                                            <label class="block text-xs font-medium text-gray-700">Fecha</label>
+                                            <input
+                                                v-model="pagoItem.fecha_pago"
+                                                type="date"
+                                                class="mt-1 block w-full rounded-md border-gray-300 text-xs shadow-sm"
+                                            />
+                                        </div>
+                                        <button
+                                            v-if="pagoForm.pagos_contado.length > 1"
+                                            type="button"
+                                            class="rounded bg-red-100 px-2 py-1.5 text-xs font-bold text-red-700"
+                                            @click="eliminarPagoContado(idx)"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
+
+                            <p v-if="excedeMontoContado" role="alert" class="text-xs font-medium text-red-700">
+                                La suma de los comprobantes de contado excede el precio acordado de la venta.
+                            </p>
                         </div>
 
                         <div class="flex justify-end">
@@ -1722,13 +2061,20 @@ const estadoClases = (estado) => ({
                                     >
                                         {{ venta.credito.estado.replaceAll('_', ' ') }}
                                     </span>
-                                    <a
-                                        v-if="venta.credito.pagare_url"
-                                        :href="venta.credito.pagare_url"
-                                        class="inline-flex items-center rounded-md bg-gray-900 px-3 py-1.5 text-xs font-bold text-yellow-400 hover:bg-gray-800"
+                                    <button
+                                        v-if="pagareUrlActual"
+                                        type="button"
+                                        class="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-bold text-yellow-400 hover:bg-gray-800"
+                                        @click="iniciarDescargaPagare"
                                     >
-                                        📄 Descargar Pagaré / Amortización (.docx)
-                                    </a>
+                                        <span>📄 Descargar Pagaré / Amortización (.docx)</span>
+                                        <span
+                                            v-if="camposFaltantesPagare.length > 0"
+                                            class="rounded bg-amber-400 px-1.5 py-0.5 text-[10px] font-extrabold text-gray-900"
+                                        >
+                                            +{{ camposFaltantesPagare.length }} dato(s)
+                                        </span>
+                                    </button>
                                 </div>
                             </div>
 
@@ -1979,7 +2325,69 @@ const estadoClases = (estado) => ({
                             </div>
                         </div>
 
-                        <div v-if="venta.pagos && venta.pagos.length" class="overflow-x-auto rounded-lg border border-gray-200">
+                        <!-- TABLA UNIFICADA DE PAGOS / CUOTAS DE CONTADO (desde cuotas_credito + pagos_credito) -->
+                        <div
+                            v-if="venta.forma_pago !== 'credito' && venta.credito && venta.credito.cuotas && venta.credito.cuotas.length"
+                            class="space-y-2"
+                        >
+                            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <p class="font-bold uppercase tracking-wide text-emerald-900">
+                                    Pagos registrados ({{ venta.credito.cuotas.length }} registro(s) en cuotas_credito)
+                                </p>
+                                <span class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold uppercase text-emerald-800">
+                                    {{ venta.credito.estado }}
+                                </span>
+                            </div>
+                            <div class="overflow-x-auto rounded-lg border border-emerald-200 bg-white">
+                                <table class="min-w-full divide-y divide-gray-200 text-xs">
+                                    <thead class="bg-emerald-50 text-left font-semibold uppercase tracking-wide text-emerald-900">
+                                        <tr>
+                                            <th class="px-3 py-2.5">N°</th>
+                                            <th class="px-3 py-2.5">Fecha de pago</th>
+                                            <th class="px-3 py-2.5 text-right">Capital</th>
+                                            <th class="px-3 py-2.5 text-right">Interés</th>
+                                            <th class="px-3 py-2.5 text-right">Valor</th>
+                                            <th class="px-3 py-2.5 text-right">Pagado</th>
+                                            <th class="px-3 py-2.5">Estado</th>
+                                            <th class="px-3 py-2.5">Caja</th>
+                                            <th class="px-3 py-2.5 text-right">Comprobante privado</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-100 bg-white">
+                                        <tr v-for="cuota in venta.credito.cuotas" :key="cuota.id_cuota_credito">
+                                            <td class="px-3 py-2 font-semibold text-gray-800">#{{ cuota.numero_cuota }}</td>
+                                            <td class="px-3 py-2 font-mono text-gray-700">{{ cuota.fecha_pago_real || cuota.fecha_vencimiento }}</td>
+                                            <td class="px-3 py-2 text-right font-mono text-gray-700">{{ formatearMoneda(cuota.monto_capital) }}</td>
+                                            <td class="px-3 py-2 text-right font-mono text-gray-500">{{ formatearMoneda(cuota.monto_interes) }}</td>
+                                            <td class="px-3 py-2 text-right font-mono font-bold text-gray-900">{{ formatearMoneda(cuota.valor_cuota) }}</td>
+                                            <td class="px-3 py-2 text-right font-mono font-bold text-emerald-700">{{ formatearMoneda(cuota.monto_pagado) }}</td>
+                                            <td class="px-3 py-2">
+                                                <span
+                                                    :class="estadoCuotaClases(cuota.estado)"
+                                                    class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+                                                >
+                                                    {{ cuota.estado }}
+                                                </span>
+                                            </td>
+                                            <td class="px-3 py-2 font-mono text-[11px] text-indigo-700">
+                                                {{ cuota.id_transaccion_caja ? `Asiento #${cuota.id_transaccion_caja}` : 'Registrado' }}
+                                            </td>
+                                            <td class="px-3 py-2 text-right">
+                                                <a
+                                                    v-if="cuota.comprobante_url"
+                                                    :href="cuota.comprobante_url"
+                                                    class="font-semibold text-emerald-700 hover:text-emerald-900"
+                                                >
+                                                    Descargar comprobante
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div v-else-if="venta.pagos && venta.pagos.length" class="overflow-x-auto rounded-lg border border-gray-200">
                             <table class="min-w-full divide-y divide-gray-200 text-xs">
                                 <thead class="bg-gray-50 text-left font-semibold uppercase tracking-wide text-gray-600">
                                     <tr>
@@ -2062,193 +2470,342 @@ const estadoClases = (estado) => ({
                         </form>
                     </div>
                 </section>
-            </div>
-        </div>
 
-        <!-- MODAL DE ESCANEO DE CÉDULA CON IA Y GENERACIÓN DE CONSTANCIA WORD (.DOCX) -->
-        <Modal :show="mostrarModalConstancia" max-width="2xl" @close="mostrarModalConstancia = false">
-            <div class="p-6">
-                <div class="flex items-start justify-between gap-4 border-b border-gray-200 pb-4">
-                    <div>
-                        <h3 class="text-lg font-bold text-gray-900">
-                            Generar Constancia · {{ operacionForm.tipo_operacion === 'reserva' ? 'Reserva' : 'Venta' }} de Vehículo
-                        </h3>
-                        <p class="mt-1 text-xs text-gray-600">
-                            Sube la cédula del comprador para extraer sus datos con Gemini IA, revísalos y descarga el documento Word (.docx).
-                        </p>
-                    </div>
-                    <button
-                        type="button"
-                        class="rounded-md px-2 py-1 text-sm font-semibold text-gray-500 hover:bg-gray-100 hover:text-gray-800"
-                        @click="mostrarModalConstancia = false"
-                    >
-                        ✕
-                    </button>
-                </div>
-
-                <div class="mt-5 space-y-5">
-                    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                            <label for="documento-cedula-comprador" class="text-sm font-semibold text-gray-900">
-                                1. Cédula escaneada del comprador
-                            </label>
-                            <a
-                                v-if="cedulaUrlActual"
-                                :href="cedulaUrlActual"
-                                class="text-xs font-semibold text-indigo-700 hover:text-indigo-900"
-                            >
-                                Ver cédula guardada
-                            </a>
+                <!-- PASO 3: NUEVO MÓDULO DE GENERACIÓN DE CONSTANCIA DE VENTA (BASADO EN tipo_contrato DEL VEHÍCULO) -->
+                <section class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+                    <div class="flex flex-col justify-between gap-3 border-b border-gray-200 bg-gray-900 px-5 py-4 text-white sm:flex-row sm:items-center">
+                        <div>
+                            <h3 class="text-sm font-bold uppercase tracking-wide text-yellow-400">
+                                Paso 3 · Generación de Constancia de {{ operacionForm.tipo_operacion === 'reserva' ? 'Reserva' : 'Venta' }}
+                            </h3>
+                            <p class="mt-0.5 text-xs text-gray-300">
+                                Emisión documental automatizada según el tipo de contrato con el que ingresó el vehículo en Compras.
+                            </p>
                         </div>
-                        <div class="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-                            <input
-                                id="documento-cedula-comprador"
-                                type="file"
-                                :disabled="escaneandoCedula"
-                                accept="image/jpeg,image/png,image/webp,.pdf"
-                                class="block w-full text-xs text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-900 file:px-3 py-2 file:text-white hover:file:bg-gray-700"
-                                @change="seleccionarCedula"
-                            />
-                            <button
-                                type="button"
-                                :disabled="escaneandoCedula || !archivoCedula"
-                                class="whitespace-nowrap rounded-md bg-yellow-500 px-4 py-2 text-xs font-bold text-gray-900 shadow-sm hover:bg-yellow-400 disabled:opacity-50"
-                                @click="escanearCedulaConGemini"
-                            >
-                                {{ escaneandoCedula ? 'Escaneando con Gemini...' : 'Escanear cédula con IA' }}
-                            </button>
-                        </div>
-                        <div
-                            v-if="exitoCedula"
-                            role="status"
-                            class="mt-2 rounded-md border border-emerald-300 bg-emerald-50 p-2.5 text-xs font-medium text-emerald-900"
+                        <span
+                            v-if="constanciaUrlActual"
+                            class="w-fit rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-300"
                         >
-                            ✅ {{ exitoCedula }}
-                        </div>
-                        <div
-                            v-if="avisoCedula"
-                            role="alert"
-                            class="mt-2 rounded-md border-2 border-amber-400 bg-amber-50 p-2.5 text-xs font-medium text-amber-950"
+                            ✓ Constancia generada
+                        </span>
+                        <span
+                            v-else
+                            class="w-fit rounded-full bg-indigo-500/20 px-3 py-1 text-xs font-bold text-indigo-200"
                         >
-                            ⚠️ {{ avisoCedula }}
-                        </div>
-                        <p v-if="errorCedula" role="alert" class="mt-2 text-xs font-medium text-red-600">
-                            {{ errorCedula }}
-                        </p>
+                            Pendiente de emisión
+                        </span>
                     </div>
 
-                    <form class="space-y-4" @submit.prevent="generarYDescargarConstancia">
-                        <p class="text-sm font-semibold text-gray-900">
-                            2. Datos del comprador para la constancia y pagaré
-                        </p>
-                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                            <div class="sm:col-span-2">
-                                <label class="block text-xs font-medium text-gray-700">Nombre completo del comprador *</label>
-                                <input
-                                    v-model="datosCedula.nombre_completo"
-                                    type="text"
-                                    required
-                                    maxlength="200"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
+                    <div class="space-y-4 p-5">
+                        <!-- Matriz 2x2 de selección automática de los 4 modelos de constancia -->
+                        <div class="grid grid-cols-1 gap-4 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4 sm:grid-cols-3">
+                            <div>
+                                <p class="text-[11px] font-bold uppercase tracking-wide text-indigo-900">
+                                    Tipo de contrato del vehículo (BD)
+                                </p>
+                                <p class="mt-1 text-sm font-extrabold text-gray-900">
+                                    {{ venta.vehiculo?.tipo_contrato_nombre || 'Propietario (Por defecto)' }}
+                                </p>
+                                <p class="mt-0.5 text-xs text-gray-600">
+                                    Categoría:
+                                    <span class="rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-indigo-900">
+                                        {{ venta.constancia_estrategia?.categoria || 'PROPIO' }}
+                                    </span>
+                                    · Modalidad:
+                                    <span class="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-900">
+                                        {{ venta.constancia_estrategia?.modalidad || 'CONTADO' }}
+                                    </span>
+                                </p>
                             </div>
                             <div>
-                                <label class="block text-xs font-medium text-gray-700">Número de cédula *</label>
-                                <input
-                                    v-model="datosCedula.cedula"
-                                    type="text"
-                                    required
-                                    maxlength="30"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
+                                <p class="text-[11px] font-bold uppercase tracking-wide text-indigo-900">
+                                    Modelo Word seleccionado
+                                </p>
+                                <p class="mt-1 text-sm font-extrabold text-indigo-950">
+                                    {{ venta.constancia_estrategia?.etiqueta || 'Constancia de Compra-Venta' }}
+                                </p>
+                                <p class="mt-0.5 font-mono text-xs font-semibold text-indigo-700">
+                                    {{ venta.constancia_estrategia?.archivo_plantilla || 'Contado_propio.docx' }}
+                                </p>
                             </div>
                             <div>
-                                <label class="block text-xs font-medium text-gray-700">Estado civil</label>
-                                <input
-                                    v-model="datosCedula.estado_civil"
-                                    type="text"
-                                    maxlength="60"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700">Correo electrónico (citación COGEP / pagaré)</label>
-                                <input
-                                    v-model="datosCedula.correo"
-                                    type="email"
-                                    maxlength="120"
-                                    placeholder="cliente@correo.com"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700">Dirección domiciliaria (pagaré)</label>
-                                <input
-                                    v-model="datosCedula.direccion"
-                                    type="text"
-                                    maxlength="200"
-                                    placeholder="Cantón / Parroquia / Dirección"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
+                                <p class="text-[11px] font-bold uppercase tracking-wide text-indigo-900">
+                                    {{ requiereClienteVendedor ? 'Propietario anterior (Requerido PODER)' : 'Titular / Vendedor en documento' }}
+                                </p>
+                                <p v-if="requiereClienteVendedor" class="mt-1 text-sm font-bold text-gray-900">
+                                    {{ datosVendedorAnterior.nombre_cliente_vendedor || 'Pendiente de completar al emitir' }}
+                                </p>
+                                <p v-else class="mt-1 text-sm font-bold text-gray-900">
+                                    HUGO DANIEL SORIA ROBALINO (Propio)
+                                </p>
+                                <p v-if="requiereClienteVendedor && datosVendedorAnterior.cedula_cliente_vendedor" class="mt-0.5 font-mono text-xs text-gray-600">
+                                    CI/RUC: {{ datosVendedorAnterior.cedula_cliente_vendedor }}
+                                </p>
                             </div>
                         </div>
 
-                        <div class="flex items-center gap-2">
-                            <input
-                                id="venta-es-casado"
-                                v-model="datosCedula.es_casado"
-                                type="checkbox"
-                                class="h-4 w-4 rounded border-gray-300 text-indigo-600"
-                            />
-                            <label for="venta-es-casado" class="text-xs font-medium text-gray-800">
-                                El comprador es casado / unión de hecho (incluir cónyuge en el documento)
-                            </label>
-                        </div>
-
-                        <div v-if="datosCedula.es_casado" class="grid grid-cols-1 gap-4 rounded-md border border-indigo-200 bg-indigo-50/50 p-3 sm:grid-cols-2">
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700">Nombre completo del cónyuge *</label>
-                                <input
-                                    v-model="datosCedula.nombre_conyuge"
-                                    type="text"
-                                    :required="datosCedula.es_casado"
-                                    maxlength="200"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700">Cédula del cónyuge (opcional)</label>
-                                <input
-                                    v-model="datosCedula.cedula_conyuge"
-                                    type="text"
-                                    maxlength="30"
-                                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                                />
-                            </div>
+                        <!-- Indicadores de verificación previa -->
+                        <div class="flex flex-wrap items-center gap-2 text-xs">
+                            <span
+                                class="rounded-full px-3 py-1 font-semibold"
+                                :class="cedulaUrlActual ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'"
+                            >
+                                {{ cedulaUrlActual ? '✓ Cédula cargada' : '• Cédula pendiente (Paso 1)' }}
+                            </span>
+                            <span
+                                class="rounded-full px-3 py-1 font-semibold"
+                                :class="puedeGenerarConstancia ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'"
+                            >
+                                {{ puedeGenerarConstancia ? '✓ Precio y crédito autorizados' : '• Pendiente autorización de precio o crédito (Paso 2)' }}
+                            </span>
+                            <span
+                                v-if="camposFaltantesConstancia.length > 0"
+                                class="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-900"
+                            >
+                                • Datos por completar al emitir: {{ camposFaltantesConstancia.map((c) => c.label).join(', ') }}
+                            </span>
+                            <span
+                                v-else
+                                class="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-800"
+                            >
+                                ✓ Datos del comprador completos
+                            </span>
                         </div>
 
                         <p v-if="errorConstancia" role="alert" class="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-700">
                             {{ errorConstancia }}
                         </p>
 
-                        <div class="flex flex-col-reverse justify-end gap-3 border-t border-gray-200 pt-4 sm:flex-row">
+                        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 pt-4">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <a
+                                    v-if="constanciaUrlActual"
+                                    :href="constanciaUrlActual"
+                                    class="inline-flex items-center rounded-md bg-blue-700 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-600"
+                                >
+                                    📄 Descargar constancia actual (.docx)
+                                </a>
+                            </div>
                             <button
                                 type="button"
-                                class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                                @click="mostrarModalConstancia = false"
+                                :disabled="!puedeGenerarConstancia || generandoConstancia"
+                                class="rounded-md bg-yellow-500 px-5 py-2.5 text-sm font-bold text-gray-900 shadow-sm hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-40"
+                                @click="iniciarGeneracionConstancia"
                             >
-                                Cancelar
-                            </button>
-                            <button
-                                type="submit"
-                                :disabled="generandoConstancia || !datosCedula.nombre_completo.trim() || !datosCedula.cedula.trim()"
-                                class="rounded-md bg-gray-900 px-5 py-2 text-sm font-semibold text-yellow-400 hover:bg-gray-800 disabled:opacity-50"
-                            >
-                                {{ generandoConstancia ? 'Generando constancia...' : 'Generar y descargar constancia (.docx)' }}
+                                {{
+                                    generandoConstancia
+                                        ? 'Generando constancia...'
+                                        : constanciaUrlActual
+                                            ? 'Regenerar Constancia (.docx)'
+                                            : 'Generar Constancia (.docx)'
+                                }}
                             </button>
                         </div>
-                    </form>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- MODAL RÁPIDO: COMPLETAR SOLO DATOS FALTANTES DEL COMPRADOR (PARA PAGARÉ O CONSTANCIA) -->
+        <Modal :show="mostrarModalFaltantes" max-width="lg" @close="mostrarModalFaltantes = false">
+            <div class="p-6">
+                <div class="flex items-start justify-between gap-4 border-b border-gray-200 pb-3">
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">
+                            {{
+                                modoModalFaltantes === 'pagare'
+                                    ? 'Completar datos requeridos para el Pagaré'
+                                    : modoModalFaltantes === 'constancia'
+                                        ? 'Completar datos requeridos para la Constancia'
+                                        : 'Datos del Comprador'
+                            }}
+                        </h3>
+                        <p class="mt-1 text-xs text-gray-600">
+                            {{
+                                modoModalFaltantes === 'editar'
+                                    ? 'Revisa o actualiza los datos sincronizados del comprador. Si existe un crédito, el Pagaré se regenerará automáticamente.'
+                                    : 'Solo necesitamos completar los siguientes campos faltantes para emitir el documento (.docx).'
+                            }}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        class="rounded-md px-2 py-1 text-sm font-semibold text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                        @click="mostrarModalFaltantes = false"
+                    >
+                        ✕
+                    </button>
                 </div>
+
+                <form class="mt-4 space-y-4" @submit.prevent="completarDatosYContinuar">
+                    <div class="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-semibold text-gray-700">Nombre completo del comprador *</label>
+                            <input
+                                v-model="datosCedula.nombre_completo"
+                                type="text"
+                                required
+                                maxlength="200"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700">Número de cédula / RUC *</label>
+                            <input
+                                v-model="datosCedula.cedula"
+                                type="text"
+                                required
+                                maxlength="30"
+                                class="mt-1 block w-full rounded-md border-gray-300 font-mono text-sm shadow-sm"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700">Correo electrónico (citación COGEP) *</label>
+                            <input
+                                v-model="datosCedula.correo"
+                                type="email"
+                                required
+                                maxlength="120"
+                                placeholder="cliente@correo.com"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                            />
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-semibold text-gray-700">Dirección domiciliaria *</label>
+                            <input
+                                v-model="datosCedula.direccion"
+                                type="text"
+                                required
+                                maxlength="200"
+                                placeholder="Provincia / Cantón / Parroquia / Dirección"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700">
+                                Teléfono del comprador {{ modoModalFaltantes === 'constancia' ? '*' : '(opcional)' }}
+                            </label>
+                            <input
+                                v-model="datosCedula.telefono"
+                                type="text"
+                                :required="modoModalFaltantes === 'constancia'"
+                                maxlength="30"
+                                placeholder="Ej: 0999999999"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700">Estado civil</label>
+                            <input
+                                v-model="datosCedula.estado_civil"
+                                type="text"
+                                maxlength="60"
+                                placeholder="Ej: SOLTERO, CASADO, DIVORCIADO"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                            />
+                        </div>
+                    </div>
+
+                    <!-- Datos del propietario anterior (solo cuando el modelo es PODER) -->
+                    <div
+                        v-if="requiereClienteVendedor && modoModalFaltantes !== 'pagare'"
+                        class="space-y-3 rounded-md border border-amber-300 bg-amber-50/70 p-3.5"
+                    >
+                        <p class="text-xs font-bold text-amber-950">
+                            Datos del Propietario Anterior (Requerido para modelo PODER / Mandato / Firma Directa)
+                        </p>
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-800">Nombre completo propietario anterior *</label>
+                                <input
+                                    v-model="datosVendedorAnterior.nombre_cliente_vendedor"
+                                    type="text"
+                                    required
+                                    maxlength="200"
+                                    placeholder="Nombres y apellidos"
+                                    class="mt-1 block w-full rounded-md border-gray-300 bg-white text-sm shadow-sm"
+                                />
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-800">Cédula / RUC propietario anterior *</label>
+                                <input
+                                    v-model="datosVendedorAnterior.cedula_cliente_vendedor"
+                                    type="text"
+                                    required
+                                    maxlength="30"
+                                    placeholder="Ej: 1801234567"
+                                    class="mt-1 block w-full rounded-md border-gray-300 bg-white font-mono text-sm shadow-sm"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <input
+                            id="venta-es-casado"
+                            v-model="datosCedula.es_casado"
+                            type="checkbox"
+                            class="h-4 w-4 rounded border-gray-300 text-indigo-600"
+                        />
+                        <label for="venta-es-casado" class="text-xs font-medium text-gray-800">
+                            El comprador es casado / unión de hecho (incluir cónyuge en la constancia)
+                        </label>
+                    </div>
+
+                    <div
+                        v-if="datosCedula.es_casado"
+                        class="grid grid-cols-1 gap-3 rounded-md border border-indigo-200 bg-indigo-50/50 p-3 sm:grid-cols-2"
+                    >
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700">Nombre completo del cónyuge *</label>
+                            <input
+                                v-model="datosCedula.nombre_conyuge"
+                                type="text"
+                                :required="datosCedula.es_casado"
+                                maxlength="200"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700">Cédula del cónyuge (opcional)</label>
+                            <input
+                                v-model="datosCedula.cedula_conyuge"
+                                type="text"
+                                maxlength="30"
+                                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                            />
+                        </div>
+                    </div>
+
+                    <p v-if="errorModalFaltantes" role="alert" class="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-700">
+                        {{ errorModalFaltantes }}
+                    </p>
+
+                    <div class="flex flex-col-reverse justify-end gap-3 border-t border-gray-200 pt-4 sm:flex-row">
+                        <button
+                            type="button"
+                            class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                            @click="mostrarModalFaltantes = false"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            type="submit"
+                            :disabled="guardandoComprador || generandoConstancia || !datosCedula.nombre_completo.trim() || !datosCedula.cedula.trim()"
+                            class="rounded-md bg-gray-900 px-5 py-2 text-sm font-semibold text-yellow-400 hover:bg-gray-800 disabled:opacity-50"
+                        >
+                            {{
+                                guardandoComprador || generandoConstancia
+                                    ? 'Procesando...'
+                                    : modoModalFaltantes === 'pagare'
+                                        ? 'Guardar y descargar Pagaré (.docx)'
+                                        : modoModalFaltantes === 'constancia'
+                                            ? 'Guardar y generar Constancia (.docx)'
+                                            : 'Guardar datos del comprador'
+                            }}
+                        </button>
+                    </div>
+                </form>
             </div>
         </Modal>
     </AuthenticatedLayout>

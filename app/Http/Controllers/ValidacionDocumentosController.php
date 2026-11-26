@@ -1380,14 +1380,26 @@ class ValidacionDocumentosController extends Controller
                     'credito' => 'Crédito (vence '.$validated['fecha_vencimiento'].')',
                 };
 
+                $vehiculoIngresado = Vehiculo::query()
+                    ->with('clienteVendedor')
+                    ->find($validacionBloqueada->placa);
+                $detalleVendedor = $vehiculoIngresado?->clienteVendedor !== null
+                    ? sprintf(
+                        ' · Vendedor: %s (CI: %s)',
+                        $vehiculoIngresado->clienteVendedor->nombre_completo,
+                        $vehiculoIngresado->clienteVendedor->cedula,
+                    )
+                    : '';
+
                 Movimientos_vehiculo::create([
                     'id_vehiculo' => $validacionBloqueada->placa,
                     'id_tipo_movimiento' => $tipoMovimiento->id_tipo_movimiento,
                     'id_usuario' => $request->user()->id,
                     'descripcion' => sprintf(
-                        'Ingreso efectivo al inventario · Forma de pago: %s · Costo de adquisición: $%s.',
+                        'Ingreso efectivo al inventario · Forma de pago: %s · Costo de adquisición: $%s%s.',
                         $etiquetaPago,
                         number_format($costoAdquisicion, 2, '.', ','),
+                        $detalleVendedor,
                     ),
                     'fecha_movimiento' => now(),
                 ]);
@@ -1712,6 +1724,8 @@ class ValidacionDocumentosController extends Controller
         $validated = $request->validate([
             'nombre_completo' => ['required', 'string', 'max:200'],
             'cedula' => ['required', 'string', 'max:30'],
+            'telefono' => ['nullable', 'string', 'max:30'],
+            'direccion' => ['nullable', 'string', 'max:200'],
             'estado_civil' => ['nullable', 'string', 'max:60'],
             'es_casado' => ['required', 'boolean'],
             'nombre_conyuge' => ['nullable', 'string', 'max:200', 'required_if:es_casado,true'],
@@ -1821,9 +1835,14 @@ class ValidacionDocumentosController extends Controller
         }
 
         $rutaAnterior = $validacion->ruta_contrato_generado;
+        $telefono = trim((string) ($validated['telefono'] ?? ''));
+        $direccion = trim((string) ($validated['direccion'] ?? ''));
+
         $datosCedulaActualizados = [
             'nombre_completo' => $nombreCompleto,
             'cedula' => $cedula,
+            'telefono' => $telefono,
+            'direccion' => $direccion,
             'estado_civil' => $estadoCivil,
             'es_casado' => $esCasado,
             'nombre_conyuge' => $nombreConyuge,
@@ -1834,6 +1853,22 @@ class ValidacionDocumentosController extends Controller
             'datos_cedula_cliente' => $datosCedulaActualizados,
             'ruta_contrato_generado' => $rutaRelativa,
         ]);
+
+        // Sincroniza al cliente vendedor en `clientes` (Vendedor / Ambos) y lo enlaza al vehículo
+        $clienteVendedor = \App\Models\Cliente::sincronizarConRol(
+            $cedula,
+            [
+                'nombre_completo' => $nombreCompleto,
+                'telefono' => $telefono,
+                'direccion' => $direccion,
+                'ruta_cedula' => is_string($validacion->ruta_cedula_cliente) ? $validacion->ruta_cedula_cliente : '',
+            ],
+            \App\Models\TipoCliente::VENDEDOR,
+        );
+
+        Vehiculo::query()
+            ->whereKey($validacion->placa)
+            ->update(['id_cliente_vendedor' => $clienteVendedor->id_cliente]);
 
         Documentos_vehiculo::query()
             ->where('id_vehiculo', $validacion->placa)
@@ -2137,6 +2172,11 @@ class ValidacionDocumentosController extends Controller
             'kilometraje' => ['nullable', 'integer', 'min:0'],
             'costo_adquisicion' => ['required', 'numeric', 'min:0'],
             'precio_venta' => ['nullable', 'numeric', 'min:0', 'gte:costo_adquisicion'],
+            'vendedor_cedula' => ['nullable', 'string', 'max:30'],
+            'vendedor_nombre' => ['nullable', 'string', 'max:200'],
+            'vendedor_telefono' => ['nullable', 'string', 'max:30'],
+            'vendedor_direccion' => ['nullable', 'string', 'max:200'],
+            'vendedor_correo' => ['nullable', 'email', 'max:120'],
             'imagenes' => ['nullable', 'array', 'max:10'],
             'imagenes.*' => ['required', 'string', 'max:255'],
         ])->validate();
@@ -2181,7 +2221,32 @@ class ValidacionDocumentosController extends Controller
             'servicio',
             'ultima_fecha_revision',
             'lugar_revision',
+            'vendedor_cedula',
+            'vendedor_nombre',
+            'vendedor_telefono',
+            'vendedor_direccion',
+            'vendedor_correo',
         ]);
+
+        $vendedorCedula = trim((string) (
+            $datosValidados['vendedor_cedula']
+            ?? ($validacion->datos_cedula_cliente['cedula'] ?? '')
+        ));
+        if ($vendedorCedula !== '') {
+            $clienteVendedor = \App\Models\Cliente::sincronizarConRol(
+                $vendedorCedula,
+                [
+                    'nombre_completo' => $datosValidados['vendedor_nombre']
+                        ?? ($validacion->datos_cedula_cliente['nombre_completo'] ?? ''),
+                    'telefono' => $datosValidados['vendedor_telefono'] ?? '',
+                    'direccion' => $datosValidados['vendedor_direccion'] ?? '',
+                    'correo' => $datosValidados['vendedor_correo'] ?? '',
+                    'ruta_cedula' => is_string($validacion->ruta_cedula_cliente) ? $validacion->ruta_cedula_cliente : '',
+                ],
+                \App\Models\TipoCliente::VENDEDOR,
+            );
+            $atributosVehiculo['id_cliente_vendedor'] = $clienteVendedor->id_cliente;
+        }
         $atributosVehiculo['id_estado'] = EstadoVehiculo::firstOrCreate(['nombre' => 'Creado'])->id_estado;
         $atributosVehiculo['id_tipo_vehiculo'] = $tipoVehiculo === null
             ? null

@@ -14,6 +14,7 @@ class CuotaCredito extends Model
 
     protected $fillable = [
         'id_credito',
+        'id_venta',
         'numero_cuota',
         'fecha_vencimiento',
         'monto_capital',
@@ -45,6 +46,11 @@ class CuotaCredito extends Model
     public function credito(): BelongsTo
     {
         return $this->belongsTo(Credito::class, 'id_credito', 'id_credito');
+    }
+
+    public function venta(): BelongsTo
+    {
+        return $this->belongsTo(Venta::class, 'id_venta', 'id_venta');
     }
 
     public function pagos(): HasMany

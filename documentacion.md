@@ -209,6 +209,100 @@ npm run build
 
 ## 7. Registro de Cambios Realizados por Agentes
 
+### 2026-11-26 — Corrección de cierre de sesiones y control de concurrencia local en `scripts/auditoria/cte.cjs`
+- **Resumen funcional:** Se corrigió la fuga de sesiones activas en `scripts/auditoria/cte.cjs`: se eliminó el caché incompleto `cte_session.json` (que omitía las cookies de `/AutoServicioConsultaInfracciones` y dejaba sesiones abiertas tras consultas exitosas), se añadió el cierre explícito de sesión en `finally` (`salir.jsp` + limpieza de cookies de la instancia), se agregó un cerrojo local (`cte_consulta.lock`) para evitar consultas simultáneas desde el ERP y una ventana de enfriamiento (`cte_cooldown.json`) cuando el portal reporta límite de sesiones activas, marcando `requiere_revision_manual: true` sin intentar evadir controles ni desafíos anti-bot.
+- **Archivos modificados:**
+  - `scripts/auditoria/cte.cjs`
+  - `documentacion.md`
+
+### 2026-11-26 — Reubicación de captura de Cliente Vendedor desde `Ingreso.vue` a `ValidacionDocumentos/Show.vue` (`GenerarConstanciaModal.vue`)
+- **Resumen funcional:** Se eliminó el bloque de solicitud de datos del cliente vendedor en `Vehiculos/Ingreso.vue` y se trasladó al modal **Generar Constancia** de `ValidacionDocumentos/Show.vue` (`GenerarConstanciaModal.vue`). Al generar la constancia de compra, se solicitan cédula/RUC (con búsqueda/autocompletado automático en `clientes`), nombre completo, teléfono y dirección; al confirmar, `ValidacionDocumentosController::generarConstancia()` sincroniza al cliente con rol `Vendedor` (o `Ambos` si ya era `Comprador`) y actualiza `vehiculos.id_cliente_vendedor`.
+- **Archivos modificados:**
+  - `resources/js/Pages/Vehiculos/Ingreso.vue`
+  - `resources/js/Components/ValidacionDocumentos/GenerarConstanciaModal.vue`
+  - `app/Http/Controllers/ValidacionDocumentosController.php` (`generarConstancia`)
+  - `documentacion.md`
+- **Comandos requeridos en local:** `npm run build`.
+
+### 2026-11-26 — Seeder de Catálogos `tipo_combustibles` y `transmisiones` (`CombustibleYTransmisionSeeder`)
+- **Resumen funcional:** Se creó el seeder idempotente `CombustibleYTransmisionSeeder` para poblar los catálogos `tipo_combustibles` (`Gasolina`, `Diésel`, `Híbrido`, `Híbrido Enchufable`, `Eléctrico`, `GLP (Gas)`) y `transmisiones` (`Manual`, `Automática`, `CVT (Variable Continua)`, `Tiptronic / Secuencial`, `Doble Embrague (DCT)`), registrado en `DatabaseSeeder` junto a `TipoClienteSeeder`.
+- **Archivos creados o modificados:**
+  - `database/seeders/CombustibleYTransmisionSeeder.php` (nuevo)
+  - `database/seeders/DatabaseSeeder.php`
+- **Comandos requeridos en local:** `php artisan db:seed` (o `php artisan db:seed --class=CombustibleYTransmisionSeeder`).
+
+### 2026-11-25 — Módulo completo de Generación Automática de Constancias de Compra-Venta (4 Modelos `.docx`)
+- **Resumen funcional:** Se implementó el generador automático de constancias de venta en `ConstanciaVentaGeneratorService` conectado con las 4 plantillas oficiales en `storage/app/plantillas/` mediante matriz 2×2 (`tipo_contrato` del vehículo × modalidad de pago):
+  - `PROPIO` (`Doble contrato`, `Contrato directo`, `Propietario`, fallback) + `CONTADO` → `Contado_propio.docx`
+  - `PROPIO` + `CREDITO` → `Credito-Propio.docx`
+  - `PODER` (`Poder`, `Contrato de mandato`, `Firma directa`) + `CONTADO` → `Contado_poder.docx`
+  - `PODER` + `CREDITO` → `credito_poder.docx`
+  Incluye limpieza automática de XML (desfragmentación de `<w:r>`/`<w:proofErr>`, inserción/normalización de `${/bloque_pagos}` antes de `CUARTA`, eliminación de `QUINIENTOS ` residual en `Contado_poder.docx`, normalización de `${telefono cliente}` y reemplazo dinámico de `, soltero,` por el `estado_civil` del comprador), clonación dinámica de `${bloque_pagos}` leyendo las cuotas unificadas (`cuotas_credito`) tanto para contado como para crédito, y validación bajo demanda de campos faltantes (incluyendo propietario anterior obligatorio en modelos `PODER`, guardándolo en `clientes` y enlazándolo a `vehiculos.id_cliente_vendedor`).
+- **Base de datos:** Sin nuevas migraciones; consume `ventas`, `vehiculos`, `tipo_contrato`, `clientes`, `tipo_cliente`, `creditos`, `cuotas_credito` y `pagos_credito`.
+- **Archivos creados o modificados:**
+  - `app/Services/ConstanciaVentaGeneratorService.php`
+  - `app/Http/Controllers/MisVentasController.php` (`show`, `registrarFormaPago`, `generarConstancia`)
+  - `config/app.php` (`banco_concesionario`, `cuenta_bancaria_concesionario`, `titular_cuenta_concesionario`)
+  - `resources/js/Pages/MisVentas/Show.vue` (matriz visual en Paso 3, método/referencia en pagos de contado y captura bajo demanda de teléfono y propietario anterior en modelos `PODER`)
+  - `tests/Feature/ConstanciaVentaGeneratorTest.php` (nuevo)
+  - `documentacion.md`
+- **Rutas, permisos y seguridad:** Las constancias generadas se guardan **exclusivamente** en el disco privado `local` (`storage/app/private/ventas/{id_venta}/constancias/constancia_{categoria}_{modalidad}_{placa}_{timestamp}.docx`), eliminando el archivo previo al regenerar y sirviéndose únicamente bajo `GET /mis-ventas/{venta}/constancia` con `middleware(['auth'])`, validación de acceso a la venta y cabecera `X-Content-Type-Options: nosniff`.
+- **Comandos requeridos en local:** `npm run build` (y opcionalmente `php artisan test --filter=ConstanciaVentaGeneratorTest`).
+
+### 2026-11-25 — Catálogo `tipo_cliente` y relación `vehiculos.id_cliente_vendedor` con `clientes`
+- **Resumen funcional:** Se unificaron los vendedores de vehículos al concesionario dentro de la tabla `clientes` clasificados mediante el nuevo catálogo `tipo_cliente` (`Comprador`, `Vendedor`, `Ambos`), vinculando directamente cada vehículo mediante `vehiculos.id_cliente_vendedor`. Al registrar un vehículo en Compras (`Ingreso.vue`) o al aprobarlo desde Validación Documental, si la cédula no existe en `clientes` se crea como `Vendedor`, y si ya existía como `Comprador` pasa automáticamente a `Ambos` (y viceversa en `MisVentasController`), dejando constancia en el Kardex (`movimientos_vehiculos`).
+- **Base de datos:**
+  - Migración: `database/migrations/2026_11_25_180000_create_tipo_cliente_and_link_vehiculos_vendedor.php` (crea `tipo_cliente`, inserta `Comprador`/`Vendedor`/`Ambos`, agrega `clientes.id_tipo_cliente` con *backfill* a `Comprador`, y agrega `vehiculos.id_cliente_vendedor` FK a `clientes.id_cliente`).
+  - Seeder: `database/seeders/TipoClienteSeeder.php`.
+- **Archivos creados o modificados:**
+  - `database/migrations/2026_11_25_180000_create_tipo_cliente_and_link_vehiculos_vendedor.php` (nuevo)
+  - `database/seeders/TipoClienteSeeder.php` (nuevo)
+  - `app/Models/TipoCliente.php` (nuevo)
+  - `app/Models/Cliente.php` (`tipoCliente()`, `vehiculosVendidos()`, `sincronizarConRol()`)
+  - `app/Models/vehiculo.php` (`id_cliente_vendedor`, `clienteVendedor()`)
+  - `app/Http/Controllers/VehiculoIngresoController.php` (`buscarClientePorCedula`)
+  - `app/Services/VehiculoIngreso/VehiculoIngresoService.php` (persistencia de cliente vendedor y asiento Kardex)
+  - `app/Http/Controllers/ValidacionDocumentosController.php` (persistencia de cliente vendedor al aprobar y asiento Kardex)
+  - `app/Http/Controllers/MisVentasController.php` (`sincronizarClienteComprador` con promoción automática a `Ambos`, eager loading de `vehiculo.clienteVendedor.tipoCliente`)
+  - `app/Services/Inventario/InventarioConsultaService.php` (carga `clienteVendedor.tipoCliente` con ocultamiento a roles sin permisos financieros)
+  - `app/Services/ConstanciaVentaGeneratorService.php` (eager loading de `vehiculo.clienteVendedor.tipoCliente` y variables `${vendedor_vehiculo_nombre}` / `${vendedor_vehiculo_cedula}`)
+  - `routes/web.php` (`GET /vehiculos/clientes/buscar` → `vehiculos.clientes.buscar`)
+  - `resources/js/Pages/Vehiculos/Ingreso.vue` (sección Cliente Vendedor con autocompletado por cédula)
+  - `resources/js/Components/Vehiculos/DetalleVehiculoModal.vue` (tarjeta Cliente Vendedor restringida por `puedeVerDatosFinancieros`)
+- **Rutas, permisos y seguridad:** Nueva ruta `GET /vehiculos/clientes/buscar` protegida bajo `middleware(['auth'])`. En Inventario (`InventarioConsultaService` y `DetalleVehiculoModal.vue`), los datos del cliente vendedor se ocultan automáticamente a roles sin `puedeVerDatosFinancieros`.
+- **Comandos requeridos en local:** `php artisan migrate`, `php artisan db:seed --class=TipoClienteSeeder`, `npm run build`.
+
+### 2026-11-25 — Unificación de pagos de Contado (y abonos múltiples) en `cuotas_credito`, `pagos_credito` y `transacciones_cajas`
+- **Resumen funcional:** Se unificó el registro de pagos para ventas de **contado** (pago único por 100% o múltiples comprobantes/abonos) dentro de `cuotas_credito` (`monto_capital = monto`, `monto_interes = 0`, `monto_mora = 0`, `valor_cuota = monto`, `monto_pagado = monto`, `fecha_pago_real`, `estado = 'pagada'`), `pagos_credito` (vinculado a `id_cuota_credito` y `id_transaccion_caja`) y `transacciones_cajas`, mediante una cabecera consistente en `creditos` con `modalidad = 'contado'` (o `'cuotas'`), `monto_financiado = 0`, `saldo_pendiente = 0`, `estado = 'pagado'` y `ruta_pagare = null`. No dispara aprobación de crédito ni generación de Pagaré, y permite a `ConstanciaVentaGeneratorService::obtenerCuotasVenta()` leer los pagos sin distinción de modalidad.
+- **Base de datos:**
+  - Migración: `database/migrations/2026_11_25_174500_unify_cuotas_credito_for_contado_sales.php` (agrega `modalidad` a `creditos` e `id_venta` con FK a `ventas` en `cuotas_credito`, incluyendo backfill de registros existentes).
+- **Archivos creados o modificados:**
+  - `database/migrations/2026_11_25_174500_unify_cuotas_credito_for_contado_sales.php` (nuevo)
+  - `app/Models/Credito.php` (`modalidad`)
+  - `app/Models/CuotaCredito.php` (`id_venta`, relación `venta()`)
+  - `app/Models/Venta.php` (relación `cuotasCredito()`)
+  - `app/Services/ConstanciaVentaGeneratorService.php` (`obtenerCuotasVenta()`)
+  - `app/Http/Controllers/MisVentasController.php` (`show`, `registrarFormaPago`, `registrarAbonoCuota`, `persistirPagosContadoEnCuotasCredito`, `agregarAbonoContadoEnCuotasCredito`, guardas de no-pagaré en `escanearCedula` / `actualizarDatosComprador` / `generarConstancia` / `sincronizarEstadosMoraCredito`)
+  - `resources/js/Pages/MisVentas/Show.vue` (soporte multi-comprobante en Contado y renderizado unificado desde `cuotas_credito` con descarga privada)
+  - `tests/Feature/VentaContadoCuotasCreditoTest.php` (nuevo)
+- **Rutas, permisos y seguridad:** Todos los comprobantes de contado se almacenan exclusivamente en el disco privado `local` (`storage/app/private/ventas/{id_venta}/pagos/...`) y se descargan únicamente a través de la ruta protegida `mis-ventas.credito.pagos.comprobante` bajo `middleware(['auth'])`.
+- **Comandos requeridos en local:** `php artisan migrate`, `npm run build`.
+
+### 2026-11-25 — Reestructuración del flujo de Mis Ventas (3 pasos) y servicio `ConstanciaVentaGeneratorService` por `tipo_contrato`
+- **Resumen funcional:** Se reorganizó la pantalla de gestión comercial (`MisVentas/Show.vue`) en 3 pasos operativos secuenciales y se reemplazó el módulo reciclado de constancia de compra por una arquitectura dedicada a constancias de venta según el `tipo_contrato` con el que ingresó el vehículo en Compras:
+  1. **Paso 1 — Identificación del Comprador:** Subida de cédula al inicio del flujo con ejecución automática en segundo plano de Gemini Vision (`escanear_gemini.cjs`), sincronizando `clientes` / `ventas` / `creditos` sin bloquear el avance si faltan campos opcionales o no legibles (`direccion`, `correo`, cónyuge).
+  2. **Paso 2 — Configuración Comercial, Forma de Pago y Crédito:** Operación (`venta` / `reserva`), precio acordado (Lista/Final), forma de pago y crédito (`Crédito abierto` / `Crédito > 3 meses` con tasa fija `1.70%` / `1.50%`), con modal rápido de solo campos faltantes al emitir/descargar el Pagaré si falta algún dato obligatorio.
+  3. **Paso 3 — Generación de Constancia de Venta:** Ubicado al final del flujo; muestra en pantalla el `tipo_contrato` registrado en BD (`vehiculos.id_tipo_contrato` → `tipo_contrato`) y la estrategia resuelta por `ConstanciaVentaGeneratorService` (lista para conectar las dos plantillas `.docx` definitivas y sus condicionales). Al hacer clic en «Generar Constancia», valida datos faltantes en el modal compacto y genera/descarga el `.docx`.
+- **Base de datos:** Sin nuevas migraciones; consume la relación existente `vehiculos.id_tipo_contrato` → `tipo_contrato.id_tipo_contrato` (con respaldo en `documentos_vehiculos.id_tipo_contrato`).
+- **Archivos creados o modificados:**
+  - `app/Services/ConstanciaVentaGeneratorService.php` (nuevo)
+  - `app/Http/Controllers/MisVentasController.php` (`show`, `actualizarDatosComprador`, `generarConstancia`)
+  - `routes/web.php` (`PATCH /mis-ventas/{venta}/comprador` → `mis-ventas.comprador.update`)
+  - `resources/js/Pages/MisVentas/Show.vue`
+  - `documentacion.md`
+- **Rutas, permisos y seguridad:** Nueva ruta `PATCH /mis-ventas/{venta}/comprador` bajo `middleware(['auth'])` con verificación `puedeAccederVenta`. Todas las cédulas, pagarés y constancias `.docx` generadas se guardan exclusivamente en disco privado `local` (`storage/app/private/documentos/contratos/ventas/...`).
+- **Comandos requeridos en local:** `npm run build`.
+
 ### 2026-11-25 — Tasa de interés fija escalonada (1.70% mensual meses 1–12 y 1.50% desde mes 13)
 - **Resumen funcional:** Se fijó la tasa de interés oficial del concesionario en **1.70% mensual** sobre el monto financiado durante los primeros 12 meses (ej. sobre \$10,000 → \$170/mes; a 10 meses = \$1,700 de interés) y con reducción automática al **1.50% mensual** a partir del mes 13 (\$150/mes sobre \$10,000) cuando el plazo supera los 12 meses.
 - **Base de datos:**

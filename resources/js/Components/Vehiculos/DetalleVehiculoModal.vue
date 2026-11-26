@@ -261,6 +261,39 @@ onUnmounted(() => window.removeEventListener('keydown', manejarTecla));
                     :puede-subir-contrato="puedeSubirContrato"
                 />
 
+                <!-- DATOS DEL CLIENTE VENDEDOR (SOLO ROLES CON PERMISO FINANCIERO / ADQUISICIÓN) -->
+                <section
+                    v-if="puedeVerDatosFinancieros && vehiculo.cliente_vendedor"
+                    class="overflow-hidden rounded-lg border border-indigo-200 bg-white"
+                >
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-200 bg-indigo-50 px-4 py-3">
+                        <h4 class="text-sm font-bold uppercase tracking-wide text-indigo-950">
+                            Cliente Vendedor (Origen de Adquisición)
+                        </h4>
+                        <span class="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-bold text-indigo-800">
+                            Tipo: {{ vehiculo.cliente_vendedor.tipo_cliente || 'Vendedor' }}
+                        </span>
+                    </div>
+                    <div class="grid grid-cols-1 gap-4 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                        <div>
+                            <span class="block text-xs font-semibold uppercase text-gray-500">Nombre completo</span>
+                            <span class="font-bold text-gray-900">{{ vehiculo.cliente_vendedor.nombre_completo }}</span>
+                        </div>
+                        <div>
+                            <span class="block text-xs font-semibold uppercase text-gray-500">Cédula / RUC</span>
+                            <span class="font-mono font-bold text-gray-900">{{ vehiculo.cliente_vendedor.cedula }}</span>
+                        </div>
+                        <div>
+                            <span class="block text-xs font-semibold uppercase text-gray-500">Teléfono</span>
+                            <span class="text-gray-800">{{ vehiculo.cliente_vendedor.telefono || 'No registrado' }}</span>
+                        </div>
+                        <div>
+                            <span class="block text-xs font-semibold uppercase text-gray-500">Dirección</span>
+                            <span class="text-gray-800">{{ vehiculo.cliente_vendedor.direccion || 'No registrada' }}</span>
+                        </div>
+                    </div>
+                </section>
+
                 <DetalleExpedienteDocumental
                     :vehiculo="vehiculo"
                 />

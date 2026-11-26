@@ -17,6 +17,7 @@ class Credito extends Model
         'id_cliente',
         'id_venta',
         'id_vehiculo',
+        'modalidad',
         'id_tasa_interes',
         'user_id',
         'monto_total',

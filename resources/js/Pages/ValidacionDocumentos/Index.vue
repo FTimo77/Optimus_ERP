@@ -1,6 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head, Link } from '@inertiajs/vue3';
+import { Head, Link, router } from '@inertiajs/vue3';
 
 defineProps({
     validaciones: {
@@ -54,6 +54,10 @@ const estadoClases = (estado) => ({
 const fechaTexto = (fecha) => (
     fecha ? new Date(fecha).toLocaleString('es-EC') : 'No disponible'
 );
+
+const abrirExpediente = (id) => {
+    router.visit(route('validacion-documentos.show', id));
+};
 </script>
 
 <template>
@@ -145,7 +149,15 @@ const fechaTexto = (fecha) => (
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200 bg-white">
-                                <tr v-for="validacion in validaciones.data" :key="validacion.id" class="hover:bg-gray-50">
+                                <tr
+                                    v-for="validacion in validaciones.data"
+                                    :key="validacion.id"
+                                    tabindex="0"
+                                    role="button"
+                                    class="cursor-pointer transition hover:bg-amber-50/70 focus:bg-amber-50 focus:outline-none"
+                                    @click="abrirExpediente(validacion.id)"
+                                    @keydown.enter="abrirExpediente(validacion.id)"
+                                >
                                     <td class="whitespace-nowrap px-5 py-4 font-mono text-sm font-semibold text-gray-900">
                                         {{ validacion.placa }}
                                     </td>
@@ -188,6 +200,7 @@ const fechaTexto = (fecha) => (
                                         <Link
                                             :href="route('validacion-documentos.show', validacion.id)"
                                             class="font-semibold text-indigo-700 hover:text-indigo-900"
+                                            @click.stop
                                         >
                                             {{ tabActiva === 'historial' ? 'Ver expediente' : 'Revisar' }}
                                         </Link>

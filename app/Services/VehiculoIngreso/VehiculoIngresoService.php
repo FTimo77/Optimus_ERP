@@ -3,6 +3,7 @@
 namespace App\Services\VehiculoIngreso;
 
 use App\Models\clase_vehiculo;
+use App\Models\Cliente;
 use App\Models\color_vehiculo;
 use App\Models\Documentos_vehiculo;
 use App\Models\estado_vehiculo;
@@ -13,6 +14,7 @@ use App\Models\pais;
 use App\Models\Servicio;
 use App\Models\Tipo_movimiento;
 use App\Models\tipo_combustible;
+use App\Models\TipoCliente;
 use App\Models\TipoContrato;
 use App\Models\TipoVehiculo;
 use App\Models\transmision;
@@ -104,6 +106,11 @@ class VehiculoIngresoService
             'kilometraje' => ['nullable', 'integer', 'min:0'],
             'costo_adquisicion' => ['required', 'numeric', 'min:0'],
             'precio_venta' => ['nullable', 'numeric', 'min:0', 'gte:costo_adquisicion'],
+            'vendedor_cedula' => ['nullable', 'string', 'max:30'],
+            'vendedor_nombre' => ['nullable', 'string', 'max:200'],
+            'vendedor_telefono' => ['nullable', 'string', 'max:30'],
+            'vendedor_direccion' => ['nullable', 'string', 'max:200'],
+            'vendedor_correo' => ['nullable', 'email', 'max:120'],
         ]);
 
         $categoriaIngreso = $validated['categoria_ingreso'] ?? 'particular';
@@ -176,7 +183,7 @@ class VehiculoIngresoService
         }
 
         try {
-            DB::transaction(function () use ($validated, $imagePaths, $validacionAuditoria): void {
+            DB::transaction(function () use ($request, $validated, $imagePaths, $validacionAuditoria): void {
                 if ($validacionAuditoria !== null) {
                     $validacionBloqueada = ValidacionDocumento::query()
                         ->whereKey($validacionAuditoria->id)
@@ -194,7 +201,28 @@ class VehiculoIngresoService
 
                 $tipoVehiculo = $validated['tipo_vehiculo'] ?? null;
                 $servicio = $validated['servicio'] ?? null;
-                unset($validated['tipo_vehiculo'], $validated['servicio']);
+                $vendedorCedula = trim((string) ($validated['vendedor_cedula'] ?? ''));
+                $vendedorDatos = [
+                    'nombre_completo' => $validated['vendedor_nombre'] ?? '',
+                    'telefono' => $validated['vendedor_telefono'] ?? '',
+                    'direccion' => $validated['vendedor_direccion'] ?? '',
+                    'correo' => $validated['vendedor_correo'] ?? '',
+                ];
+                unset(
+                    $validated['tipo_vehiculo'],
+                    $validated['servicio'],
+                    $validated['vendedor_cedula'],
+                    $validated['vendedor_nombre'],
+                    $validated['vendedor_telefono'],
+                    $validated['vendedor_direccion'],
+                    $validated['vendedor_correo'],
+                );
+
+                $clienteVendedor = null;
+                if ($vendedorCedula !== '') {
+                    $clienteVendedor = Cliente::sincronizarConRol($vendedorCedula, $vendedorDatos, TipoCliente::VENDEDOR);
+                    $validated['id_cliente_vendedor'] = $clienteVendedor->id_cliente;
+                }
 
                 $validated['id_tipo_vehiculo'] = $tipoVehiculo === null
                     ? null
@@ -221,6 +249,24 @@ class VehiculoIngresoService
 
                     $validacionBloqueada->update(['estado_revision' => 'registrada']);
                 }
+
+                $tipoMovimiento = Tipo_movimiento::firstOrCreate(['nombre' => 'Ingreso a Inventario']);
+                $detalleVendedor = $clienteVendedor !== null
+                    ? sprintf(' · Vendedor: %s (CI: %s)', $clienteVendedor->nombre_completo, $clienteVendedor->cedula)
+                    : '';
+
+                Movimientos_vehiculo::create([
+                    'id_vehiculo' => $vehiculo->id_vehiculo,
+                    'id_tipo_movimiento' => $tipoMovimiento->id_tipo_movimiento,
+                    'id_usuario' => $request->user()->id,
+                    'descripcion' => sprintf(
+                        'Ingreso de vehículo al inventario (%s %s)%s.',
+                        $vehiculo->modelo,
+                        (string) $vehiculo->anio,
+                        $detalleVendedor,
+                    ),
+                    'fecha_movimiento' => now(),
+                ]);
             });
         } catch (Throwable $exception) {
             Storage::disk('public')->delete($imagePaths);

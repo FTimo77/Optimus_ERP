@@ -58,6 +58,7 @@ class InventarioConsultaService
             'patio',
             'estado',
             'proveedor',
+            'clienteVendedor.tipoCliente',
             'imagenPrincipal',
         ])->orderByDesc('created_at')->get();
 
@@ -125,6 +126,8 @@ class InventarioConsultaService
                     $data['total_pagado'],
                     $data['saldo_pendiente_pago'],
                     $data['forma_pago'],
+                    $data['cliente_vendedor'],
+                    $data['clienteVendedor'],
                 );
             }
 
@@ -167,10 +170,26 @@ class InventarioConsultaService
 
         $vehiculo->setAttribute(
             'proveedor_nombre',
-            $vehiculo->proveedor?->nombre
+            $vehiculo->clienteVendedor?->nombre_completo
+                ?? $vehiculo->proveedor?->nombre
                 ?? $validacion?->subidor?->name
                 ?? 'No registrado',
         );
+
+        if ($puedeVerFinancieros && $vehiculo->clienteVendedor !== null) {
+            $cv = $vehiculo->clienteVendedor;
+            $vehiculo->setAttribute('cliente_vendedor', [
+                'id_cliente' => $cv->id_cliente,
+                'nombre_completo' => $cv->nombre_completo,
+                'cedula' => $cv->cedula,
+                'telefono' => $cv->telefono,
+                'direccion' => $cv->direccion,
+                'correo' => $cv->correo,
+                'tipo_cliente' => $cv->tipoCliente?->nombre ?? 'Vendedor',
+            ]);
+        } else {
+            $vehiculo->setAttribute('cliente_vendedor', null);
+        }
 
         $metodoIngreso = $vehiculo->metodo_ingreso ?? $validacion?->categoria_ingreso;
         $vehiculo->setAttribute(

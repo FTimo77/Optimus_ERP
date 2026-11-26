@@ -58,6 +58,9 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/vehiculos/ingreso', [VehiculoIngresoController::class, 'store'])
         ->name('vehiculos.store');
 
+    Route::get('/vehiculos/clientes/buscar', [VehiculoIngresoController::class, 'buscarClientePorCedula'])
+        ->name('vehiculos.clientes.buscar');
+
     Route::post('/vehiculos/consultar-axis', [VehiculoIngresoController::class, 'consultarAxisCloud'])
         ->name('vehiculos.consultar.axis');
 
@@ -134,6 +137,8 @@ Route::middleware(['auth'])->group(function () {
         ->name('mis-ventas.pago.comprobante');
     Route::post('/mis-ventas/{venta}/escanear-cedula', [MisVentasController::class, 'escanearCedula'])
         ->name('mis-ventas.escanear.cedula');
+    Route::patch('/mis-ventas/{venta}/comprador', [MisVentasController::class, 'actualizarDatosComprador'])
+        ->name('mis-ventas.comprador.update');
     Route::post('/mis-ventas/{venta}/generar-constancia', [MisVentasController::class, 'generarConstancia'])
         ->name('mis-ventas.generar.constancia');
     Route::get('/mis-ventas/{venta}/constancia', [MisVentasController::class, 'descargarConstancia'])
